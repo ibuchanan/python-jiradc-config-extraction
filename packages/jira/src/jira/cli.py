@@ -9,8 +9,11 @@ import json
 import os
 import re
 import sys
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
+from uuid import uuid4
 
 import httpx
 
@@ -22,8 +25,99 @@ SECRET_ASSIGNMENT = re.compile(
 )
 
 
+def _atomic_write(path: Path, content: str) -> None:
+    """Install a complete file before publishing checkpoint state."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, delete=False
+        ) as stream:
+            temp_path = Path(stream.name)
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_path, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+def _save_json(path: Path, data: dict[str, Any]) -> None:
+    _atomic_write(path, json.dumps(data, sort_keys=True) + "\n")
+
+
 async def export_fields(base_url: str, output_dir: Path, token: str) -> int:
-    """Read the field inventory and write custom fields to fields.jsonl."""
+    """Resume a completed field stage or retry it from the beginning."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / "manifest.json"
+    checkpoint_path = output_dir / "checkpoint.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    else:
+        if checkpoint_path.exists():
+            raise ValueError("Export metadata is incomplete")
+        manifest = {
+            "schema_version": 1,
+            "run_id": str(uuid4()),
+            "created_at": datetime.now(UTC).isoformat(),
+            "jira_version": None,
+            "app_versions": {},
+            "coverage": {},
+        }
+        _save_json(manifest_path, manifest)
+    if checkpoint_path.exists():
+        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    else:
+        checkpoint = {"stages": {}}
+        _save_json(checkpoint_path, checkpoint)
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version") != 1
+        or not isinstance(manifest.get("coverage"), dict)
+        or not isinstance(checkpoint, dict)
+        or not isinstance(checkpoint.get("stages"), dict)
+    ):
+        raise ValueError("Unsupported export metadata")
+    stages = checkpoint["stages"]
+    coverage = manifest["coverage"]
+    assert isinstance(stages, dict)
+    assert isinstance(coverage, dict)
+    previous = stages.get("fields")
+    if (
+        isinstance(previous, dict)
+        and previous.get("status") == "complete"
+        and (output_dir / "fields.jsonl").exists()
+    ):
+        coverage["fields"] = previous
+        _save_json(manifest_path, manifest)
+        return previous["count"]
+    try:
+        count = await _extract_fields(base_url, output_dir, token)
+    except (httpx.HTTPError, ValueError, OSError) as exc:
+        failure: dict[str, object] = {"status": "failed", "error": type(exc).__name__}
+        if isinstance(exc, httpx.HTTPStatusError):
+            failure["http_status"] = exc.response.status_code
+        stages["fields"] = failure
+        _save_json(checkpoint_path, checkpoint)
+        coverage["fields"] = failure
+        _save_json(manifest_path, manifest)
+        raise
+    complete = {"status": "complete", "count": count}
+    stages["fields"] = complete
+    _save_json(checkpoint_path, checkpoint)
+    coverage["fields"] = complete
+    _save_json(manifest_path, manifest)
+    return count
+
+
+async def _extract_fields(base_url: str, output_dir: Path, token: str) -> int:
+    """Read the field inventory and replace fields.jsonl atomically."""
     async with JiraClient(base_url, token) as client:
         response = await client.get(FIELD_PATH)
     fields = response.json()
@@ -39,10 +133,12 @@ async def export_fields(base_url: str, output_dir: Path, token: str) -> int:
         for field in custom_fields
     ):
         raise ValueError("Jira custom field missing a stable id")
-    custom_fields.sort(key=lambda field: field["id"])
+    by_id = {field["id"]: field for field in custom_fields}
+    custom_fields = [by_id[field_id] for field_id in sorted(by_id)]
     output_dir.mkdir(parents=True, exist_ok=True)
     extracted_at = datetime.now(UTC).isoformat()
-    (output_dir / "fields.jsonl").write_text(
+    _atomic_write(
+        output_dir / "fields.jsonl",
         "".join(
             json.dumps(
                 {
@@ -69,7 +165,6 @@ async def export_fields(base_url: str, output_dir: Path, token: str) -> int:
             + "\n"
             for field in custom_fields
         ),
-        encoding="utf-8",
     )
     return len(custom_fields)
 

@@ -25,7 +25,9 @@ export JIRA_PAT='your-personal-access-token'
 uv run jira-config-export https://jira.example.com/jira ./export
 ```
 
-Alternatively, omit `JIRA_PAT` to enter the token at a non-echoing prompt. The command writes `./export/fields.jsonl` (one custom field per line) and prints the field count. It uses only `GET /rest/api/2/field`; system fields are excluded. A failed request exits nonzero without writing a new export.
+Alternatively, omit `JIRA_PAT` to enter the token at a non-echoing prompt. The command writes `./export/fields.jsonl` (one custom field per line), `manifest.json`, and `checkpoint.json`, then prints the field count. It uses only `GET /rest/api/2/field`; system fields are excluded. A failed request exits nonzero and records a safe failure status without replacing an existing field export. Rerun with the same directory to skip a completed field stage or retry an incomplete/failed one. The manifest has schema version, run ID, creation timestamp, unknown Jira/app version placeholders, and stage coverage; the checkpoint has stage status, count or safe error type and HTTP status. App versions are not queried yet.
+
+Each output file is written to a temporary file in the destination directory, flushed and synchronized, then atomically replaced and directory-synchronized. `fields.jsonl` is installed before the checkpoint is marked complete. A crash before that checkpoint leaves the stage eligible for a full retry, which replaces its file and deduplicates by stable field ID (last occurrence wins); a crash after the checkpoint but before manifest coverage is updated is repaired on rerun. Completed sibling stages are retained. Run this on a local filesystem with atomic same-directory rename and directory `fsync` support; concurrent writers to one output directory are not supported.
 
 Each line is a schema version 1 record, for example:
 

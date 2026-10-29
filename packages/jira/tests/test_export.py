@@ -36,6 +36,10 @@ def use_http_fixture(
                     if request.url.path.endswith("/rest/api/2/customFields")
                     else httpx.Response(200, json={"options": [], "total": 0})
                     if "/options" in request.url.path
+                    else httpx.Response(200, json={"values": [], "total": 0})
+                    if request.url.path.endswith("/rest/api/2/screens")
+                    else httpx.Response(200, json=[])
+                    if "/rest/api/2/screens/" in request.url.path
                     else handler(request)
                 )
             ),

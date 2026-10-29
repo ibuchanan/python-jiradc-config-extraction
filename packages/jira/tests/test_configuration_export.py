@@ -25,7 +25,13 @@ def use_fixture(
             url,
             token,
             requests_per_minute=60_000,
-            transport=httpx.MockTransport(handler),
+            transport=httpx.MockTransport(
+                lambda request: (
+                    httpx.Response(200, json={"values": [], "total": 0})
+                    if request.url.path.endswith("/rest/api/2/screens")
+                    else handler(request)
+                )
+            ),
         ),
     )
     monkeypatch.setenv("JIRA_PAT", "test-pat")

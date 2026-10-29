@@ -177,7 +177,12 @@ async def export_configuration(base_url: str, output_dir: Path, token: str) -> N
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     stages = checkpoint["stages"]
     coverage = manifest["coverage"]
-    for name in ("explicit_field_contexts", "field_configurations"):
+    for name in (
+        "explicit_field_contexts",
+        "field_configurations",
+        "screen_schemes",
+        "issue_type_screen_schemes",
+    ):
         coverage[name] = {
             "status": "unsupported",
             "reason": "not exposed by bundled Jira DC 11.2.1 REST API",
@@ -187,6 +192,9 @@ async def export_configuration(base_url: str, output_dir: Path, token: str) -> N
         for stage, filename, extract in (
             ("field_applicability", "field-contexts.jsonl", _field_applicability),
             ("field_options", "field-options.jsonl", _field_options),
+            ("screens", "screens.jsonl", _screens),
+            ("screen_tabs", "screen-tabs.jsonl", _screen_tabs),
+            ("screen_placements", "screen-placements.jsonl", _screen_placements),
         ):
             previous = stages.get(stage)
             if (
@@ -195,6 +203,20 @@ async def export_configuration(base_url: str, output_dir: Path, token: str) -> N
                 and (output_dir / filename).exists()
             ):
                 coverage[stage] = previous
+                _save_json(manifest_path, manifest)
+                continue
+            prerequisite = {
+                "screen_tabs": "screens",
+                "screen_placements": "screen_tabs",
+            }.get(stage)
+            if (
+                prerequisite
+                and stages.get(prerequisite, {}).get("status") != "complete"
+            ):
+                coverage[stage] = {
+                    "status": "not_queried",
+                    "reason": f"{prerequisite} incomplete",
+                }
                 _save_json(manifest_path, manifest)
                 continue
             try:
@@ -355,6 +377,121 @@ async def _field_options(client: JiraClient, output_dir: Path) -> list[dict[str,
                 raise ValueError("Empty options page before total")
             page += 1
     return [by_id[key] for key in sorted(by_id)]
+
+
+def _screen_ids(output_dir: Path, filename: str) -> list[str]:
+    return [
+        json.loads(line)["source"]["id"]
+        for line in (output_dir / filename).read_text(encoding="utf-8").splitlines()
+    ]
+
+
+async def _screens(client: JiraClient, _output_dir: Path) -> list[dict[str, Any]]:
+    endpoint = "/rest/api/2/screens"
+    by_id: dict[str, dict[str, Any]] = {}
+    start = 0
+    while True:
+        payload = (await client.get(endpoint, params={"startAt": start})).json()
+        if (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("values"), list)
+            or not isinstance(payload.get("total"), int)
+        ):
+            raise ValueError("Invalid screens page")
+        values = payload["values"]
+        for screen in values:
+            if not isinstance(screen, dict) or not isinstance(screen.get("id"), int):
+                raise ValueError("Invalid screen identifier")
+            identifier = str(screen["id"])
+            name = screen.get("name")
+            by_id[identifier] = _record(
+                "screen",
+                identifier,
+                endpoint,
+                screen={
+                    "name": "[REDACTED]"
+                    if isinstance(name, str) and SECRET_ASSIGNMENT.search(name)
+                    else name
+                },
+            )
+        start += len(values)
+        if start >= payload["total"]:
+            break
+        if not values:
+            raise ValueError("Empty screens page before total")
+    return [by_id[key] for key in sorted(by_id, key=int)]
+
+
+async def _screen_tabs(client: JiraClient, output_dir: Path) -> list[dict[str, Any]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    for screen_id in _screen_ids(output_dir, "screens.jsonl"):
+        endpoint = f"/rest/api/2/screens/{screen_id}/tabs"
+        tabs = (await client.get(endpoint)).json()
+        if not isinstance(tabs, list):
+            raise ValueError("Invalid screen tabs response")
+        for position, tab in enumerate(tabs):
+            if not isinstance(tab, dict) or not isinstance(tab.get("id"), int):
+                raise ValueError("Invalid screen tab identifier")
+            tab_id = str(tab["id"])
+            name = tab.get("name")
+            by_id[f"{screen_id}:{tab_id}"] = _record(
+                "screen_tab",
+                f"{screen_id}:{tab_id}",
+                endpoint,
+                screen_id=screen_id,
+                position=position,
+                name="[REDACTED]"
+                if isinstance(name, str) and SECRET_ASSIGNMENT.search(name)
+                else name,
+            )
+    return [by_id[key] for key in sorted(by_id)]
+
+
+async def _screen_placements(
+    client: JiraClient, output_dir: Path
+) -> list[dict[str, Any]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    for tab in [
+        json.loads(line)
+        for line in (output_dir / "screen-tabs.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]:
+        screen_id, tab_id = tab["screen_id"], tab["source"]["id"].split(":", 1)[1]
+        endpoint = f"/rest/api/2/screens/{screen_id}/tabs/{tab_id}/fields"
+        fields = (await client.get(endpoint)).json()
+        if not isinstance(fields, list):
+            raise ValueError("Invalid screen fields response")
+        for position, field in enumerate(fields):
+            if (
+                not isinstance(field, dict)
+                or not isinstance(field.get("id"), str)
+                or not field["id"]
+            ):
+                raise ValueError("Invalid screen field identifier")
+            field_id = field["id"]
+            identifier = f"{screen_id}:{tab_id}:{field_id}"
+            by_id[identifier] = _record(
+                "screen_placement",
+                identifier,
+                endpoint,
+                screen_id=screen_id,
+                tab_id=tab_id,
+                field_id=field_id,
+                position=position,
+                show_when_empty=field.get("showWhenEmpty"),
+            )
+    return [
+        by_id[key]
+        for key in sorted(
+            by_id,
+            key=lambda key: (
+                int(key.split(":", 1)[0]),
+                int(key.split(":", 2)[1]),
+                by_id[key]["position"],
+            ),
+        )
+    ]
 
 
 def main(argv: list[str] | None = None) -> int:

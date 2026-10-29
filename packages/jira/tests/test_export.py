@@ -11,10 +11,28 @@ import httpx
 from jira import cli
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from _pytest.capture import CaptureFixture
     from _pytest.monkeypatch import MonkeyPatch
+
+
+def use_http_fixture(
+    monkeypatch: MonkeyPatch, handler: Callable[[httpx.Request], httpx.Response]
+) -> None:
+    """Route CLI requests to a local HTTP fixture instead of Jira."""
+    real_client = cli.JiraClient
+    monkeypatch.setattr(
+        cli,
+        "JiraClient",
+        lambda url, token: real_client(
+            url,
+            token,
+            requests_per_minute=60_000,
+            transport=httpx.MockTransport(handler),
+        ),
+    )
 
 
 def test_cli_exports_only_custom_fields(
@@ -33,17 +51,7 @@ def test_cli_exports_only_custom_fields(
             ],
         )
 
-    real_client = cli.JiraClient
-    monkeypatch.setattr(
-        cli,
-        "JiraClient",
-        lambda url, token: real_client(
-            url,
-            token,
-            requests_per_minute=60_000,
-            transport=httpx.MockTransport(handler),
-        ),
-    )
+    use_http_fixture(monkeypatch, handler)
     monkeypatch.setenv("JIRA_PAT", "my-secret-pat")
 
     assert cli.main(["https://jira.example.com/jira", str(tmp_path)]) == 0
@@ -102,17 +110,7 @@ def test_cli_omits_untrusted_metadata_and_redacts_secret_like_names(
             ],
         )
 
-    real_client = cli.JiraClient
-    monkeypatch.setattr(
-        cli,
-        "JiraClient",
-        lambda url, token: real_client(
-            url,
-            token,
-            requests_per_minute=60_000,
-            transport=httpx.MockTransport(handler),
-        ),
-    )
+    use_http_fixture(monkeypatch, handler)
     monkeypatch.setenv("JIRA_PAT", secret)
     assert cli.main(["https://jira.example.com", str(tmp_path)]) == 0
     exported = (tmp_path / "fields.jsonl").read_text()
@@ -132,17 +130,7 @@ def test_cli_reports_api_failure_without_token(
         assert request.method == "GET"
         return httpx.Response(403, json={"errorMessages": ["Denied my-secret-pat"]})
 
-    real_client = cli.JiraClient
-    monkeypatch.setattr(
-        cli,
-        "JiraClient",
-        lambda url, token: real_client(
-            url,
-            token,
-            requests_per_minute=60_000,
-            transport=httpx.MockTransport(handler),
-        ),
-    )
+    use_http_fixture(monkeypatch, handler)
     monkeypatch.setenv("JIRA_PAT", "my-secret-pat")
     assert cli.main(["https://jira.example.com", str(tmp_path)]) == 1
     output = capsys.readouterr()
@@ -159,17 +147,7 @@ def test_cli_prompts_without_environment_token(
         assert request.headers["Authorization"] == "Bearer prompted-pat"
         return httpx.Response(200, json=[])
 
-    real_client = cli.JiraClient
-    monkeypatch.setattr(
-        cli,
-        "JiraClient",
-        lambda url, token: real_client(
-            url,
-            token,
-            requests_per_minute=60_000,
-            transport=httpx.MockTransport(handler),
-        ),
-    )
+    use_http_fixture(monkeypatch, handler)
     monkeypatch.delenv("JIRA_PAT", raising=False)
     monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: "prompted-pat")
     assert cli.main(["https://jira.example.com", str(tmp_path)]) == 0

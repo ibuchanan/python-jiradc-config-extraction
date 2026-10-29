@@ -187,6 +187,10 @@ async def export_configuration(base_url: str, output_dir: Path, token: str) -> N
             "status": "unsupported",
             "reason": "not exposed by bundled Jira DC 11.2.1 REST API",
         }
+    coverage["dynamic_forms"] = {
+        "status": "unsupported",
+        "reason": "no supported read-only Dynamic Forms DC REST API identified",
+    }
     _save_json(manifest_path, manifest)
     async with JiraClient(base_url, token) as client:
         for stage, filename, extract in (

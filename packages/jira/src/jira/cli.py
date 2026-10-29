@@ -7,7 +7,9 @@ import asyncio
 import getpass
 import json
 import os
+import re
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -15,6 +17,9 @@ import httpx
 from .client import JiraClient
 
 FIELD_PATH = "/rest/api/2/field"
+SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(?:password|passwd|token|secret|api[_-]?key|credential|authorization)\b\s*[:=]"
+)
 
 
 async def export_fields(base_url: str, output_dir: Path, token: str) -> int:
@@ -29,10 +34,40 @@ async def export_fields(base_url: str, output_dir: Path, token: str) -> int:
         for field in fields
         if isinstance(field, dict) and field.get("custom") is True
     ]
+    if any(
+        not isinstance(field.get("id"), str) or not field["id"]
+        for field in custom_fields
+    ):
+        raise ValueError("Jira custom field missing a stable id")
+    custom_fields.sort(key=lambda field: field["id"])
     output_dir.mkdir(parents=True, exist_ok=True)
+    extracted_at = datetime.now(UTC).isoformat()
     (output_dir / "fields.jsonl").write_text(
         "".join(
-            json.dumps(field, ensure_ascii=False) + "\n" for field in custom_fields
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "source": {
+                        "system": "jira",
+                        "entity": "field",
+                        "id": field["id"],
+                        "endpoint": FIELD_PATH,
+                    },
+                    "extracted_at": extracted_at,
+                    "field": {
+                        "name": (
+                            "[REDACTED]"
+                            if isinstance(field.get("name"), str)
+                            and SECRET_ASSIGNMENT.search(field["name"])
+                            else field.get("name")
+                        )
+                    },
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            + "\n"
+            for field in custom_fields
         ),
         encoding="utf-8",
     )

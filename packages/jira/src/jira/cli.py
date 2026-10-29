@@ -169,6 +169,194 @@ async def _extract_fields(base_url: str, output_dir: Path, token: str) -> int:
     return len(custom_fields)
 
 
+async def export_configuration(base_url: str, output_dir: Path, token: str) -> None:
+    """Export supported field applicability/options; report unsupported capabilities."""
+    manifest_path = output_dir / "manifest.json"
+    checkpoint_path = output_dir / "checkpoint.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    stages = checkpoint["stages"]
+    coverage = manifest["coverage"]
+    for name in ("explicit_field_contexts", "field_configurations"):
+        coverage[name] = {
+            "status": "unsupported",
+            "reason": "not exposed by bundled Jira DC 11.2.1 REST API",
+        }
+    _save_json(manifest_path, manifest)
+    async with JiraClient(base_url, token) as client:
+        for stage, filename, extract in (
+            ("field_applicability", "field-contexts.jsonl", _field_applicability),
+            ("field_options", "field-options.jsonl", _field_options),
+        ):
+            previous = stages.get(stage)
+            if (
+                isinstance(previous, dict)
+                and previous.get("status") == "complete"
+                and (output_dir / filename).exists()
+            ):
+                coverage[stage] = previous
+                _save_json(manifest_path, manifest)
+                continue
+            try:
+                records = await extract(client, output_dir)
+                _atomic_write(
+                    output_dir / filename,
+                    "".join(
+                        json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
+                        for record in records
+                    ),
+                )
+            except (
+                httpx.HTTPStatusError,
+                httpx.RequestError,
+                ValueError,
+                OSError,
+            ) as exc:
+                status = (
+                    "unauthorized"
+                    if isinstance(exc, httpx.HTTPStatusError)
+                    and exc.response.status_code in (401, 403)
+                    else "unsupported"
+                    if isinstance(exc, httpx.HTTPStatusError)
+                    and exc.response.status_code in (404, 405, 501)
+                    else "failed"
+                )
+                result: dict[str, Any] = {"status": status, "error": type(exc).__name__}
+                if isinstance(exc, httpx.HTTPStatusError):
+                    result["http_status"] = exc.response.status_code
+                stages[stage] = result
+                coverage[stage] = result
+                _save_json(checkpoint_path, checkpoint)
+                _save_json(manifest_path, manifest)
+                continue
+            result = {"status": "complete", "count": len(records)}
+            stages[stage] = result
+            _save_json(checkpoint_path, checkpoint)
+            coverage[stage] = result
+            _save_json(manifest_path, manifest)
+
+
+def _record(
+    entity: str, identifier: str, endpoint: str, **data: object
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "source": {
+            "system": "jira",
+            "entity": entity,
+            "id": identifier,
+            "endpoint": endpoint,
+        },
+        "extracted_at": datetime.now(UTC).isoformat(),
+        **data,
+    }
+
+
+async def _field_applicability(
+    client: JiraClient, output_dir: Path
+) -> list[dict[str, Any]]:
+    endpoint = "/rest/api/2/customFields"
+    fields = {
+        json.loads(line)["source"]["id"]
+        for line in (output_dir / "fields.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    }
+    by_id: dict[str, dict[str, Any]] = {}
+    start = 0
+    while True:
+        payload = (await client.get(endpoint, params={"startAt": start})).json()
+        if (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("values"), list)
+            or not isinstance(payload.get("total"), int)
+        ):
+            raise ValueError("Invalid custom fields page")
+        values = payload["values"]
+        for field in values:
+            if not isinstance(field, dict) or not isinstance(field.get("id"), str):
+                raise ValueError("Invalid custom field identifier")
+            if field["id"] in fields:
+                by_id[field["id"]] = _record(
+                    "field_applicability",
+                    field["id"],
+                    endpoint,
+                    field_id=field["id"],
+                    project_ids=sorted(
+                        str(value) for value in field.get("projectIds", [])
+                    ),
+                    issue_type_ids=sorted(
+                        str(value) for value in field.get("issueTypeIds", [])
+                    ),
+                    all_projects=field.get("isAllProjects"),
+                )
+        start += len(values)
+        if start >= payload["total"]:
+            break
+        if not values:
+            raise ValueError("Empty custom fields page before total")
+    return [by_id[key] for key in sorted(by_id)]
+
+
+async def _field_options(client: JiraClient, output_dir: Path) -> list[dict[str, Any]]:
+    field_ids = [
+        json.loads(line)["source"]["id"]
+        for line in (output_dir / "fields.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    by_id: dict[tuple[str, str], dict[str, Any]] = {}
+    for field_id in field_ids:
+        if (
+            not field_id.startswith("customfield_")
+            or not field_id.removeprefix("customfield_").isdigit()
+        ):
+            raise ValueError("Invalid custom field id")
+        endpoint = (
+            f"/rest/api/2/customFields/{field_id.removeprefix('customfield_')}/options"
+        )
+        page = 1
+        seen = 0
+        while True:
+            payload = (
+                await client.get(
+                    endpoint, params={"page": page, "useAllContexts": True}
+                )
+            ).json()
+            if (
+                not isinstance(payload, dict)
+                or not isinstance(payload.get("options"), list)
+                or not isinstance(payload.get("total"), int)
+            ):
+                raise ValueError("Invalid custom field options page")
+            options = payload["options"]
+            for option in options:
+                if not isinstance(option, dict) or not isinstance(
+                    option.get("id"), int
+                ):
+                    raise ValueError("Invalid custom field option identifier")
+                option_id = str(option["id"])
+                value = option.get("value")
+                by_id[field_id, option_id] = _record(
+                    "field_option",
+                    f"{field_id}:{option_id}",
+                    endpoint,
+                    field_id=field_id,
+                    value="[REDACTED]"
+                    if isinstance(value, str) and SECRET_ASSIGNMENT.search(value)
+                    else value,
+                    disabled=option.get("disabled"),
+                    child_ids=[str(child) for child in option.get("childrenIds", [])],
+                )
+            seen += len(options)
+            if seen >= payload["total"]:
+                break
+            if not options:
+                raise ValueError("Empty options page before total")
+            page += 1
+    return [by_id[key] for key in sorted(by_id)]
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run a read-only export, reporting errors without printing credentials."""
     parser = argparse.ArgumentParser(
@@ -193,6 +381,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Jira field export failed ({type(exc).__name__})", file=sys.stderr)
         return 1
     print(f"{count} fields exported to {args.output_dir / 'fields.jsonl'}")
+    try:
+        asyncio.run(export_configuration(args.base_url, args.output_dir, token))
+    except (httpx.HTTPError, ValueError, OSError) as exc:
+        print(
+            f"Jira configuration export failed ({type(exc).__name__})", file=sys.stderr
+        )
+        return 1
     return 0
 
 

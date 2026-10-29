@@ -191,6 +191,10 @@ async def export_configuration(base_url: str, output_dir: Path, token: str) -> N
         "status": "unsupported",
         "reason": "no supported read-only Dynamic Forms DC REST API identified",
     }
+    coverage["scriptrunner"] = {
+        "status": "unsupported",
+        "reason": "no supported read-only ScriptRunner DC REST API identified",
+    }
     _save_json(manifest_path, manifest)
     async with JiraClient(base_url, token) as client:
         for stage, filename, extract in (

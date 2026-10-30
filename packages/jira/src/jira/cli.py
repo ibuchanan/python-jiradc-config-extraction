@@ -187,6 +187,10 @@ async def export_configuration(base_url: str, output_dir: Path, token: str) -> N
             "status": "unsupported",
             "reason": "not exposed by bundled Jira DC 11.2.1 REST API",
         }
+    coverage["elements_connect"] = {
+        "status": "unsupported",
+        "reason": "no supported read-only Elements Connect DC config API identified",
+    }
     coverage["dynamic_forms"] = {
         "status": "unsupported",
         "reason": "no supported read-only Dynamic Forms DC REST API identified",

@@ -26,7 +26,13 @@ def fixture(
             url,
             token,
             requests_per_minute=60_000,
-            transport=httpx.MockTransport(handler),
+            transport=httpx.MockTransport(
+                lambda request: (
+                    httpx.Response(404)
+                    if request.url.path.endswith("/rest/api/2/serverInfo")
+                    else handler(request)
+                )
+            ),
         ),
     )
 
@@ -132,7 +138,7 @@ def test_cli_distinguishes_empty_from_unauthorized_screen_tabs(
         raise AssertionError(path)
 
     fixture(monkeypatch, handler)
-    assert cli.main(["https://jira.example.com", str(tmp_path)]) == 0
+    assert cli.main(["https://jira.example.com", str(tmp_path)]) == 1
     coverage = json.loads((tmp_path / "manifest.json").read_text())["coverage"]
     assert coverage["screens"] == {"status": "complete", "count": 1}
     assert coverage["screen_tabs"]["status"] == "unauthorized"
@@ -194,7 +200,7 @@ def test_cli_retries_failed_placements_without_duplication(
 
     fixture(monkeypatch, handler)
     args = ["https://jira.example.com", str(tmp_path)]
-    assert cli.main(args) == 0
+    assert cli.main(args) == 1
     coverage = json.loads((tmp_path / "manifest.json").read_text())["coverage"]
     assert coverage["screen_placements"]["status"] == "failed"
     assert not (tmp_path / "screen-placements.jsonl").exists()

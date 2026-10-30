@@ -21,6 +21,8 @@ def test_cli_reports_dynamic_forms_not_queried_without_supported_api(
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if request.url.path.endswith("/serverInfo"):
+            return httpx.Response(404)
         if request.url.path.endswith("/field"):
             return httpx.Response(200, json=[])
         if request.url.path.endswith("/customFields") or request.url.path.endswith(

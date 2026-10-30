@@ -21,6 +21,8 @@ def test_cli_reports_scriptrunner_gap_without_guessing_an_endpoint(
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if request.url.path.endswith("/serverInfo"):
+            return httpx.Response(404)
         if request.url.path.endswith("/field"):
             return httpx.Response(200, json=[])
         if request.url.path.endswith(("/customFields", "/screens")):

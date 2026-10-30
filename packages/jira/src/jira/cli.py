@@ -201,6 +201,14 @@ async def export_configuration(base_url: str, output_dir: Path, token: str) -> N
     }
     _save_json(manifest_path, manifest)
     async with JiraClient(base_url, token) as client:
+        if manifest.get("jira_version") is None:
+            try:
+                info = (await client.get("/rest/api/2/serverInfo")).json()
+                if isinstance(info, dict) and isinstance(info.get("version"), str):
+                    manifest["jira_version"] = info["version"]
+                    _save_json(manifest_path, manifest)
+            except httpx.HTTPError, ValueError:
+                pass  # Version is optional; do not expose server response content.
         for stage, filename, extract in (
             ("field_applicability", "field-contexts.jsonl", _field_applicability),
             ("field_options", "field-options.jsonl", _field_options),
@@ -231,6 +239,7 @@ async def export_configuration(base_url: str, output_dir: Path, token: str) -> N
                 }
                 _save_json(manifest_path, manifest)
                 continue
+            print(f"Extracting {stage}...")
             try:
                 records = await extract(client, output_dir)
                 _atomic_write(
@@ -506,6 +515,41 @@ async def _screen_placements(
     ]
 
 
+def _print_summary(output_dir: Path, *, fields_failed: bool = False) -> bool:
+    manifest_path = output_dir / "manifest.json"
+    if not manifest_path.exists():
+        return True
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    coverage = manifest["coverage"]
+    queried = (
+        "field_applicability",
+        "field_options",
+        "screens",
+        "screen_tabs",
+        "screen_placements",
+    )
+    if fields_failed:
+        for stage in queried:
+            coverage.setdefault(
+                stage, {"status": "not_queried", "reason": "fields incomplete"}
+            )
+        _save_json(manifest_path, manifest)
+    print("Coverage summary:")
+    for stage, result in sorted(coverage.items()):
+        status = result["status"]
+        suffix = (
+            f" ({result['count']} records"
+            + (", not found" if result["count"] == 0 else "")
+            + ")"
+            if status == "complete"
+            else ""
+        )
+        print(f"  {stage}: {status}{suffix}")
+    return fields_failed or any(
+        coverage[stage]["status"] != "complete" for stage in queried
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run a read-only export, reporting errors without printing credentials."""
     parser = argparse.ArgumentParser(
@@ -525,9 +569,11 @@ def main(argv: list[str] | None = None) -> int:
             f"Jira {FIELD_PATH} returned HTTP {exc.response.status_code}",
             file=sys.stderr,
         )
+        _print_summary(args.output_dir, fields_failed=True)
         return 1
     except (httpx.RequestError, ValueError, OSError) as exc:
         print(f"Jira field export failed ({type(exc).__name__})", file=sys.stderr)
+        _print_summary(args.output_dir, fields_failed=True)
         return 1
     print(f"{count} fields exported to {args.output_dir / 'fields.jsonl'}")
     try:
@@ -537,7 +583,7 @@ def main(argv: list[str] | None = None) -> int:
             f"Jira configuration export failed ({type(exc).__name__})", file=sys.stderr
         )
         return 1
-    return 0
+    return int(_print_summary(args.output_dir))
 
 
 if __name__ == "__main__":

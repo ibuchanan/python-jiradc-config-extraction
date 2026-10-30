@@ -32,7 +32,9 @@ def use_http_fixture(
             requests_per_minute=60_000,
             transport=httpx.MockTransport(
                 lambda request: (
-                    httpx.Response(200, json={"values": [], "total": 0})
+                    httpx.Response(404)
+                    if request.url.path.endswith("/rest/api/2/serverInfo")
+                    else httpx.Response(200, json={"values": [], "total": 0})
                     if request.url.path.endswith("/rest/api/2/customFields")
                     else httpx.Response(200, json={"options": [], "total": 0})
                     if "/options" in request.url.path

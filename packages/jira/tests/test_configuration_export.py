@@ -27,7 +27,9 @@ def use_fixture(
             requests_per_minute=60_000,
             transport=httpx.MockTransport(
                 lambda request: (
-                    httpx.Response(200, json={"values": [], "total": 0})
+                    httpx.Response(404)
+                    if request.url.path.endswith("/rest/api/2/serverInfo")
+                    else httpx.Response(200, json={"values": [], "total": 0})
                     if request.url.path.endswith("/rest/api/2/screens")
                     else handler(request)
                 )
@@ -164,7 +166,7 @@ def test_cli_reports_unauthorized_applicability_without_claiming_empty(
         raise AssertionError(str(request.url))
 
     use_fixture(monkeypatch, handler)
-    assert cli.main(["https://jira.example.com", str(tmp_path)]) == 0
+    assert cli.main(["https://jira.example.com", str(tmp_path)]) == 1
     assert not (tmp_path / "field-contexts.jsonl").exists()
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     checkpoint = json.loads((tmp_path / "checkpoint.json").read_text())
@@ -188,7 +190,7 @@ def test_cli_reports_unsupported_options_and_empty_applicability(
         raise AssertionError(str(request.url))
 
     use_fixture(monkeypatch, handler)
-    assert cli.main(["https://jira.example.com", str(tmp_path)]) == 0
+    assert cli.main(["https://jira.example.com", str(tmp_path)]) == 1
     assert (tmp_path / "field-contexts.jsonl").read_text() == ""
     assert not (tmp_path / "field-options.jsonl").exists()
     coverage = json.loads((tmp_path / "manifest.json").read_text())["coverage"]
@@ -219,7 +221,7 @@ def test_cli_retries_incomplete_options_without_duplication(
 
     use_fixture(monkeypatch, handler)
     args = ["https://jira.example.com", str(tmp_path)]
-    assert cli.main(args) == 0
+    assert cli.main(args) == 1
     assert (
         json.loads((tmp_path / "checkpoint.json").read_text())["stages"][
             "field_options"

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Extract and analyze Jira Data Center configuration"
 readme = "SPEC.md"
 requires-python = ">=3.14"
-dependencies = ["jira"]
+dependencies = ["config", "jira"]
 
 [dependency-groups]
 dev = [
@@ -18,11 +18,12 @@ dev = [
 members = ["packages/*"]
 
 [tool.uv.sources]
+config = { workspace = true }
 jira = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = ["packages"]
-pythonpath = ["packages/jira/src"]
+pythonpath = ["packages/config/src", "packages/jira/src"]
 
 [tool.poe.tasks]
 format = "ruff format ."
@@ -55,10 +56,10 @@ include = ["packages"]
 
 [tool.ty.environment]
 python = ".venv"
-root = ["./packages/jira/src"]
+root = ["./packages/config/src", "./packages/jira/src"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["jira"]
+known-first-party = ["config", "jira"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["packages/jira/src/jira"]

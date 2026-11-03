@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -18,10 +17,6 @@ if TYPE_CHECKING:
     from .client import JiraClient
 
 logger = logging.getLogger(__name__)
-
-SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b(?:password|passwd|token|secret|api[_-]?key|credential|authorization)\b\s*[:=]"
-)
 
 _UNAUTHORIZED_CODES = (401, 403)
 _UNSUPPORTED_CODES = (404, 405, 501)
@@ -134,13 +129,9 @@ async def field_inventory(client: JiraClient) -> list[dict[str, object]]:
             "field",
             field["id"],
             endpoint,
+            raw=field,
             field={
-                "name": (
-                    "[REDACTED]"
-                    if isinstance(field.get("name"), str)
-                    and SECRET_ASSIGNMENT.search(field["name"])
-                    else field.get("name")
-                ),
+                "name": field.get("name"),
                 **(
                     {"schema": {"custom": field["schema"]["custom"]}}
                     if isinstance(field.get("schema"), dict)
@@ -210,6 +201,7 @@ async def custom_fields(
                         "custom_fields",
                         field["id"],
                         endpoint,
+                        raw=field,
                         field_id=field["id"],
                         project_ids=sorted(
                             str(value) for value in field.get("projectIds", [])
@@ -287,13 +279,9 @@ async def custom_field_options(
                         "custom_field_option",
                         f"{field_id}:{option_id}",
                         endpoint,
+                        raw=option,
                         field_id=field_id,
-                        value=(
-                            "[REDACTED]"
-                            if isinstance(value, str)
-                            and SECRET_ASSIGNMENT.search(value)
-                            else value
-                        ),
+                        value=value,
                         disabled=option.get("disabled"),
                         child_ids=[
                             str(child) for child in option.get("childrenIds", [])
@@ -354,13 +342,8 @@ async def screens(client: JiraClient, start_at: int = 0) -> AsyncIterator[Batch]
                     "screen",
                     identifier,
                     endpoint,
-                    screen={
-                        "name": (
-                            "[REDACTED]"
-                            if isinstance(name, str) and SECRET_ASSIGNMENT.search(name)
-                            else name
-                        )
-                    },
+                    raw=screen,
+                    screen={"name": name},
                 )
 
             start += len(values)
@@ -407,13 +390,10 @@ async def screen_tabs(
                     "screen_tab",
                     f"{screen_id}:{tab_id}",
                     endpoint,
+                    raw=tab,
                     screen_id=screen_id,
                     position=position,
-                    name=(
-                        "[REDACTED]"
-                        if isinstance(name, str) and SECRET_ASSIGNMENT.search(name)
-                        else name
-                    ),
+                    name=name,
                 )
 
             yield Batch(list(by_id.values()), index + 1)
@@ -462,6 +442,7 @@ async def screen_tab_fields(
                     "screen_tab_field",
                     identifier,
                     endpoint,
+                    raw=field,
                     screen_id=screen_id,
                     tab_id=tab_id,
                     field_id=field_id,
@@ -477,13 +458,6 @@ async def screen_tab_fields(
         raise _map_request_error(exc) from exc
     except ValueError as exc:
         raise _invalid_response(str(exc), exc) from exc
-
-
-def _safe_name(value: object) -> object:
-    """Redact names that look like credential assignments, as other stages do."""
-    if isinstance(value, str) and SECRET_ASSIGNMENT.search(value):
-        return "[REDACTED]"
-    return value
 
 
 def _identifier(value: object) -> str | None:
@@ -527,9 +501,10 @@ async def projects(client: JiraClient, start_at: int = 0) -> AsyncIterator[Batch
                 "project",
                 identifier,
                 endpoint,
+                raw=project,
                 project={
                     "key": project["key"],
-                    "name": _safe_name(project.get("name")),
+                    "name": project.get("name"),
                     "project_type_key": project.get("projectTypeKey"),
                     "archived": project.get("archived"),
                 },
@@ -573,8 +548,9 @@ async def issue_types(client: JiraClient, start_at: int = 0) -> AsyncIterator[Ba
                 "issue_type",
                 identifier,
                 endpoint,
+                raw=issue_type,
                 issue_type={
-                    "name": _safe_name(issue_type.get("name")),
+                    "name": issue_type.get("name"),
                     "subtask": issue_type.get("subtask"),
                 },
             )
@@ -660,8 +636,9 @@ async def issue_type_schemes(
                         "issue_type_scheme",
                         scheme_id,
                         f"/rest/api/2/issuetypescheme/{scheme_id}",
+                        raw=scheme,
                         issue_type_scheme={
-                            "name": _safe_name(scheme.get("name")),
+                            "name": scheme.get("name"),
                             "issue_type_ids": sorted(
                                 {str(i) for i in issue_type_ids}, key=_numeric_order
                             ),
@@ -722,9 +699,10 @@ async def project_workflow_schemes(
                         "project_workflow_scheme",
                         project_id,
                         endpoint,
+                        raw=scheme,
                         project_id=project_id,
                         workflow_scheme_id=_identifier(scheme.get("id")),
-                        workflow_scheme_name=_safe_name(scheme.get("name")),
+                        workflow_scheme_name=scheme.get("name"),
                         default_workflow=default_workflow,
                         issue_type_mappings={
                             str(issue_type): workflow
@@ -794,11 +772,12 @@ async def project_issue_type_view_screens(
                         "project_issue_type_view_screen",
                         f"{project_id}:{issue_type_id}",
                         endpoint,
+                        raw=screen,
                         project_id=project_id,
                         issue_type_id=issue_type_id,
                         view_screen={
                             "screen_id": screen_id,
-                            "screen_name": _safe_name(screen.get("screenName")),
+                            "screen_name": screen.get("screenName"),
                             "state": screen.get("state"),
                             "shared_with_project_ids": sorted(
                                 {str(i) for i in project_ids}, key=_numeric_order

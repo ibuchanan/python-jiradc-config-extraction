@@ -11,7 +11,7 @@ from jira import JiraClient, JiraError, describe_exception
 
 
 @pytest.mark.anyio
-async def test_field_inventory_uses_jira_api_and_redacts_names() -> None:
+async def test_field_inventory_uses_jira_api_and_keeps_names_verbatim() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -39,7 +39,7 @@ async def test_field_inventory_uses_jira_api_and_redacts_names() -> None:
     ]
     assert [record["field"]["name"] for record in records] == [
         "Team",
-        "[REDACTED]",
+        "password: private",
     ]
     assert requests[0].url.path == "/jira/rest/api/2/field"
 

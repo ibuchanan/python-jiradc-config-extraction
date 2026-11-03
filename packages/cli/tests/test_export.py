@@ -99,6 +99,18 @@ def test_cli_exports_only_custom_fields(
                     )
                 },
             },
+            "raw": {
+                "id": "customfield_10001",
+                "name": "Team",
+                "custom": True,
+                "schema": {
+                    "custom": (
+                        "com.valiantys.jira.plugins.SQLFeed:"
+                        "nfeed-standard-customfield-type"
+                    ),
+                    "type": "string",
+                },
+            },
         },
         {
             "schema_version": 1,
@@ -109,6 +121,7 @@ def test_cli_exports_only_custom_fields(
                 "endpoint": "/rest/api/2/field",
             },
             "field": {"name": "Cost"},
+            "raw": {"id": "customfield_10002", "name": "Cost", "custom": True},
         },
     ]
     assert len(requests) == 1
@@ -307,24 +320,21 @@ def test_cli_upserts_repeated_source_ids(
     ] == [("customfield_1", "Current")]
 
 
-def test_cli_omits_untrusted_metadata_and_redacts_secret_like_names(
+def test_cli_exports_names_verbatim_and_full_raw_payload(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
-    capsys: CaptureFixture[str],
     jira_basic_auth_fixture: FixtureSetup,
 ) -> None:
-    secret = "super-secret-fixture-value"
-
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json=[
                 {
                     "id": "customfield_2",
-                    "name": f"password={secret}",
+                    "name": "password=visible",
                     "custom": True,
-                    "description": secret,
-                    "schema": {"secret": secret},
+                    "description": "kept",
+                    "schema": {"secret": "kept"},
                 },
                 {"id": "customfield_1", "name": "Team", "custom": True},
             ],
@@ -334,13 +344,14 @@ def test_cli_omits_untrusted_metadata_and_redacts_secret_like_names(
 
     assert cli.main(["export", "export"]) == 0
     exported = (tmp_path / "export" / "fields.jsonl").read_text()
-    assert secret not in exported + str(capsys.readouterr())
     records = [json.loads(line) for line in exported.splitlines()]
     assert [record["source"]["id"] for record in records] == [
         "customfield_1",
         "customfield_2",
     ]
-    assert records[1]["field"] == {"name": "[REDACTED]"}
+    assert records[1]["field"] == {"name": "password=visible"}
+    assert records[1]["raw"]["description"] == "kept"
+    assert records[1]["raw"]["schema"] == {"secret": "kept"}
 
 
 def test_cli_reports_api_failure_without_config(

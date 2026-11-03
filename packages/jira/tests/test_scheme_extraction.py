@@ -48,7 +48,7 @@ async def test_projects_include_archived_and_are_ordered_by_numeric_id() -> None
 
     assert queries == [{"includeArchived": "true"}]
     assert [record["source"]["id"] for record in records] == ["9999", "10010"]
-    assert records[0]["project"]["name"] == "[REDACTED]"
+    assert records[0]["project"]["name"] == "password: x"
     assert records[1]["project"] == {
         "key": "OLD",
         "name": "Old",
@@ -215,7 +215,9 @@ def _view_screen_handler(
 
 
 @pytest.mark.anyio
-async def test_view_screens_use_the_internal_route_and_keep_only_ids() -> None:
+async def test_view_screens_use_the_internal_route_and_keep_ids_and_raw_payload() -> (
+    None
+):
     requests: list[str] = []
 
     async with _client(_view_screen_handler(requests)) as client:
@@ -234,7 +236,7 @@ async def test_view_screens_use_the_internal_route_and_keep_only_ids() -> None:
         "total_projects_count": 3,
         "hidden_projects_count": 1,
     }
-    assert "private-name" not in str(records)
+    assert records[0]["raw"]["sharedWithProjects"][0]["name"] == "private-name"
 
 
 @pytest.mark.anyio

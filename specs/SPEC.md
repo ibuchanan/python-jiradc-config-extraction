@@ -15,7 +15,7 @@ The first release provides configuration evidence, not an automated Jira Cloud c
 
 Typical workflow:
 
-1. Configure the Jira DC base URL and a personal access token (PAT).
+1. Configure the Jira DC base URL, user name, and password in the local, Git-ignored `.scratch/app-credentials.yaml`.
 2. Start an extraction into a local output directory.
 3. If interrupted, rerun against that directory; completed entity stages are retained and a failed stage can be retried.
 4. Inspect the JSONL records and provenance with downstream analysis tools.
@@ -28,7 +28,7 @@ The CLI must never modify Jira or app configuration.
 - Capture directly observable Elements Connect, Dynamic Forms, ScriptRunner, and other supported app associations relevant to fields/screens.
 - Make large extractions restartable without requiring a single monolithic JSON document.
 - Make each record traceable to its source and extraction time.
-- Avoid persisting secrets returned in configuration or exposing them in logs.
+- Never persist or log the Jira credentials used to run the export. Exported configuration is treated as metadata and is written as Jira returns it.
 - Report incomplete or unavailable data sources rather than presenting a partial export as complete.
 
 ## 4. Non-goals for the initial release
@@ -73,9 +73,9 @@ If an app API is unavailable, unauthorized, or unsupported, the run must report 
 
 ## 7. Authentication and safety
 
-- Initial authentication: Jira Data Center PAT supplied through an environment variable or another non-echoing secure input mechanism; do not place the token in command arguments, output, or logs.
+- Initial authentication: HTTP Basic authentication with a Jira Data Center user name and password, read from the `jira-dc` entry of the local, Git-ignored `.scratch/app-credentials.yaml` (`url`, `user`, `password`). Do not accept the password in command arguments, and do not place it in output, logs, or exported files. Personal access tokens are not supported yet.
 - Validate TLS certificates by default. Any insecure TLS override, if supported, must be explicit and prominently warned about.
-- Treat all source configuration as potentially sensitive. Exclude secret values from persisted records; redact secret-bearing values in errors and logs. If a secret field is omitted, preserve only a safe indication that the value was redacted when useful for analysis.
+- Treat exported configuration as non-secret metadata: it is written verbatim, with no redaction or property filtering. Keep the export credentials out of persisted records, errors, and logs. Because configuration is not redacted, store the output directory with the access controls you would give the Jira configuration itself.
 - Use read-only HTTP methods/endpoints. Do not provide mutation commands in the initial release.
 
 ## 8. Output and resumability
@@ -99,7 +99,7 @@ A proposed layout (to validate during implementation):
   associations.jsonl
 ```
 
-The manifest describes the export schema version, Jira/app versions where known, run identity/timestamps, and source/entity coverage. The checkpoint records completed and failed entity-type stages and enough error context to resume safely, without storing credentials or secrets.
+The manifest describes the export schema version, Jira/app versions where known, run identity/timestamps, and source/entity coverage. The checkpoint records completed and failed entity-type stages and enough error context to resume safely, without storing credentials.
 
 ### Checkpoint behavior
 
@@ -111,7 +111,7 @@ The manifest describes the export schema version, Jira/app versions where known,
 
 ### Normalization and provenance
 
-Records use a versioned normalized schema with source identifiers and provenance. The initial decision is normalized data plus provenance, not a verbatim archive of every raw API response. Preserve app-specific details needed for the stated analysis in explicit extension fields; do not silently discard relevant observed behavior. Whether to retain selected raw payload fragments remains open.
+Records use a versioned normalized schema with source identifiers and provenance. Each record holds a normalized view plus the complete source object, as returned by Jira, under `raw`; no properties are dropped or redacted. Preserve app-specific details in explicit extension fields; do not silently discard observed behavior.
 
 ## 9. CLI behavior
 
@@ -125,14 +125,14 @@ Exact command names/options are implementation design decisions, but the initial
 
 ## 10. Functional requirements
 
-1. The CLI can connect to a configured Jira DC site using a PAT without exposing the token in process output or artifacts.
+1. The CLI can connect to a configured Jira DC site using HTTP Basic authentication without exposing the password in process output or artifacts.
 2. It extracts the in-scope Jira field, screen, and relationship records available to the authenticated account.
 3. It queries supported app APIs for in-scope app configuration and field/screen associations.
 4. It records direct association evidence and provenance; it does not label an association as a migration blocker without a separately defined rule and evidence.
 5. It writes records incrementally in JSONL and maintains a checkpoint that supports retrying an incomplete entity stage.
 6. Re-running after interruption does not lose completed stages or create duplicate logical records.
 7. It records source/version/capability coverage and surfaces unavailable or unauthorized integrations.
-8. It omits/redacts secrets in artifacts, exceptions, and logs.
+8. It keeps the export credentials out of artifacts, exceptions, and logs, and writes exported configuration without redaction or property filtering.
 9. It is read-only with respect to Jira and apps.
 
 ## 11. Acceptance criteria for an initial implementation
@@ -141,7 +141,7 @@ Exact command names/options are implementation design decisions, but the initial
 - A fixture-driven test demonstrates an Elements Connect field with an explicit app-config association and preserves the association’s source evidence.
 - Dynamic Forms and ScriptRunner being unavailable or unauthorized is represented as an explicit coverage gap, not as “no configuration found.”
 - A simulated interruption during one entity stage followed by rerun preserves completed stages, retries the interrupted stage, and produces no duplicate records.
-- A secret-like value returned by a fixture is absent from JSONL, checkpoint/manifest data, and logs.
+- The export password is absent from JSONL, checkpoint/manifest data, and logs; a secret-like value returned by a fixture is preserved verbatim under `raw`.
 - The summary distinguishes “not found” from “not queried/unsupported/unauthorized/failed.”
 - The CLI performs no write requests to Jira or app endpoints.
 

@@ -140,7 +140,13 @@ async def field_inventory(client: JiraClient) -> list[dict[str, object]]:
                     if isinstance(field.get("name"), str)
                     and SECRET_ASSIGNMENT.search(field["name"])
                     else field.get("name")
-                )
+                ),
+                **(
+                    {"schema": {"custom": field["schema"]["custom"]}}
+                    if isinstance(field.get("schema"), dict)
+                    and isinstance(field["schema"].get("custom"), str)
+                    else {}
+                ),
             },
         )
         for field in custom_field_defs

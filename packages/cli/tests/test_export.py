@@ -54,7 +54,18 @@ def test_cli_exports_only_custom_fields(
             200,
             json=[
                 {"id": "summary", "name": "Summary", "custom": False},
-                {"id": "customfield_10001", "name": "Team", "custom": True},
+                {
+                    "id": "customfield_10001",
+                    "name": "Team",
+                    "custom": True,
+                    "schema": {
+                        "custom": (
+                            "com.valiantys.jira.plugins.SQLFeed:"
+                            "nfeed-standard-customfield-type"
+                        ),
+                        "type": "string",
+                    },
+                },
                 {"id": "customfield_10002", "name": "Cost", "custom": True},
             ],
         )
@@ -79,7 +90,15 @@ def test_cli_exports_only_custom_fields(
                 "id": "customfield_10001",
                 "endpoint": "/rest/api/2/field",
             },
-            "field": {"name": "Team"},
+            "field": {
+                "name": "Team",
+                "schema": {
+                    "custom": (
+                        "com.valiantys.jira.plugins.SQLFeed:"
+                        "nfeed-standard-customfield-type"
+                    )
+                },
+            },
         },
         {
             "schema_version": 1,

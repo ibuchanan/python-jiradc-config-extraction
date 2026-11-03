@@ -5,48 +5,30 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from jira import cli
+from cli import main as cli
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from pathlib import Path
 
     from _pytest.capture import CaptureFixture
     from _pytest.monkeypatch import MonkeyPatch
-
-
-def fixture(
-    monkeypatch: MonkeyPatch, handler: Callable[[httpx.Request], httpx.Response]
-) -> list[httpx.Request]:
-    requests: list[httpx.Request] = []
-    real_client = cli.JiraClient
-
-    def respond(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return handler(request)
-
-    monkeypatch.setattr(
-        cli,
-        "JiraClient",
-        lambda url, token: real_client(
-            url,
-            token,
-            requests_per_minute=60_000,
-            transport=httpx.MockTransport(respond),
-        ),
-    )
-    monkeypatch.setenv("JIRA_PAT", "private-pat")
-    return requests
+    from conftest import FixtureSetup
 
 
 def test_cli_summarizes_empty_queried_stages_and_optional_app_gaps(
-    tmp_path: Path, monkeypatch: MonkeyPatch, capsys: CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capsys: CaptureFixture[str],
+    jira_basic_auth_fixture: FixtureSetup,
 ) -> None:
+    requests: list[httpx.Request] = []
+
     def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
         path = request.url.path
         if path.endswith("/serverInfo"):
             return httpx.Response(
-                200, json={"version": "11.2.1", "serverTitle": "private-pat"}
+                200, json={"version": "11.2.1", "serverTitle": "Jira"}
             )
         if path.endswith("/field"):
             return httpx.Response(200, json=[])
@@ -54,9 +36,10 @@ def test_cli_summarizes_empty_queried_stages_and_optional_app_gaps(
             return httpx.Response(200, json={"values": [], "total": 0})
         raise AssertionError(path)
 
-    requests = fixture(monkeypatch, respond)
-    assert cli.main(["https://jira.example.com", str(tmp_path)]) == 0
-    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    jira_basic_auth_fixture("https://jira.example.com", respond)
+
+    assert cli.main(["export"]) == 0
+    manifest = json.loads((tmp_path / "export" / "manifest.json").read_text())
     assert manifest["jira_version"] == "11.2.1"
     assert manifest["app_versions"] == {}
     assert manifest["coverage"]["screens"] == {"status": "complete", "count": 0}
@@ -66,20 +49,31 @@ def test_cli_summarizes_empty_queried_stages_and_optional_app_gaps(
     assert "elements_connect: unsupported" in output
     assert "dynamic_forms: unsupported" in output
     assert "scriptrunner: unsupported" in output
-    assert "private-pat" not in output + (tmp_path / "manifest.json").read_text()
+    assert (
+        "private-password"
+        not in output + (tmp_path / "export" / "manifest.json").read_text()
+    )
     assert all(request.method == "GET" for request in requests)
 
 
 def test_field_failure_reports_not_queried_stages(
-    tmp_path: Path, monkeypatch: MonkeyPatch, capsys: CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capsys: CaptureFixture[str],
+    jira_basic_auth_fixture: FixtureSetup,
 ) -> None:
+    requests: list[httpx.Request] = []
+
     def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
         assert request.url.path.endswith("/field")
         return httpx.Response(503)
 
-    requests = fixture(monkeypatch, respond)
-    assert cli.main(["https://jira.example.com", str(tmp_path)]) == 1
-    coverage = json.loads((tmp_path / "manifest.json").read_text())["coverage"]
+    jira_basic_auth_fixture("https://jira.example.com", respond)
+    assert cli.main(["export"]) == 1
+    coverage = json.loads((tmp_path / "export" / "manifest.json").read_text())[
+        "coverage"
+    ]
     assert coverage["fields"]["status"] == "failed"
     assert coverage["screens"] == {
         "status": "not_queried",
@@ -90,7 +84,10 @@ def test_field_failure_reports_not_queried_stages(
 
 
 def test_unsupported_queried_jira_stage_is_incomplete(
-    tmp_path: Path, monkeypatch: MonkeyPatch, capsys: CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capsys: CaptureFixture[str],
+    jira_basic_auth_fixture: FixtureSetup,
 ) -> None:
     def respond(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -106,18 +103,23 @@ def test_unsupported_queried_jira_stage_is_incomplete(
             return httpx.Response(200, json={"values": [], "total": 0})
         raise AssertionError(path)
 
-    fixture(monkeypatch, respond)
-    assert cli.main(["https://jira.example.com", str(tmp_path)]) == 1
+    jira_basic_auth_fixture("https://jira.example.com", respond)
+    assert cli.main(["export"]) == 1
     assert "field_options: unsupported" in capsys.readouterr().out
-    assert (tmp_path / "fields.jsonl").exists()
+    assert (tmp_path / "export" / "fields.jsonl").exists()
 
 
 def test_cli_fails_on_required_jira_stage_and_preserves_retryable_data(
-    tmp_path: Path, monkeypatch: MonkeyPatch, capsys: CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capsys: CaptureFixture[str],
+    jira_basic_auth_fixture: FixtureSetup,
 ) -> None:
     calls = 0
+    requests: list[httpx.Request] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
         nonlocal calls
         path = request.url.path
         if path.endswith("/serverInfo"):
@@ -127,24 +129,24 @@ def test_cli_fails_on_required_jira_stage_and_preserves_retryable_data(
         if path.endswith("/customFields"):
             calls += 1
             if calls == 1:
-                return httpx.Response(403, json={"error": "private-pat"})
+                return httpx.Response(403, json={"error": "Denied"})
             return httpx.Response(200, json={"values": [], "total": 0})
         if path.endswith("/screens"):
             return httpx.Response(200, json={"values": [], "total": 0})
         raise AssertionError(path)
 
-    requests = fixture(monkeypatch, respond)
-    args = ["https://jira.example.com", str(tmp_path)]
+    jira_basic_auth_fixture("https://jira.example.com", respond)
+    args = ["export"]
     assert cli.main(args) != 0
-    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    manifest = json.loads((tmp_path / "export" / "manifest.json").read_text())
     assert manifest["jira_version"] is None
     assert manifest["coverage"]["field_applicability"]["status"] == "unauthorized"
-    assert (tmp_path / "fields.jsonl").exists()
+    assert (tmp_path / "export" / "fields.jsonl").exists()
     assert "field_applicability: unauthorized" in capsys.readouterr().out
     assert cli.main(args) == 0
     expected_attempts = 2
     assert calls == expected_attempts
     assert all(request.method == "GET" for request in requests)
-    assert "private-pat" not in "".join(
-        path.read_text() for path in tmp_path.iterdir() if path.is_file()
+    assert "private-password" not in "".join(
+        path.read_text() for path in (tmp_path / "export").iterdir() if path.is_file()
     ) + str(capsys.readouterr())

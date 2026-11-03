@@ -9,9 +9,6 @@ dependencies = [
   "httpx-limiter>=0.6.1",
 ]
 
-[project.scripts]
-jira-config-export = "jira.cli:main"
-
 [build-system]
 requires = ["hatchling>=1.27.0"]
 build-backend = "hatchling.build"

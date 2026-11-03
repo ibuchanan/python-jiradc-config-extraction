@@ -5,19 +5,19 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from jira import cli
+from cli import main as cli
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from _pytest.monkeypatch import MonkeyPatch
+    from conftest import FixtureSetup
 
 
 def test_cli_reports_elements_connect_unsupported_without_guessing_api(
-    tmp_path: Path, monkeypatch: MonkeyPatch
+    tmp_path: Path, monkeypatch: MonkeyPatch, jira_basic_auth_fixture: FixtureSetup
 ) -> None:
     requests: list[httpx.Request] = []
-    client = cli.JiraClient
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
@@ -36,32 +36,24 @@ def test_cli_reports_elements_connect_unsupported_without_guessing_api(
             return httpx.Response(200, json={"options": [], "total": 0})
         raise AssertionError(f"Unexpected API request: {request.url.path}")
 
-    monkeypatch.setattr(
-        cli,
-        "JiraClient",
-        lambda url, token: client(
-            url,
-            token,
-            requests_per_minute=60_000,
-            transport=httpx.MockTransport(respond),
-        ),
-    )
-    monkeypatch.setenv("JIRA_PAT", "test-pat")
+    jira_basic_auth_fixture("https://jira.example.com", respond)
 
-    args = ["https://jira.example.com", str(tmp_path)]
+    args = ["export"]
     assert cli.main(args) == 0
-    coverage = json.loads((tmp_path / "manifest.json").read_text())["coverage"]
+    coverage = json.loads((tmp_path / "export" / "manifest.json").read_text())[
+        "coverage"
+    ]
     assert coverage["elements_connect"] == {
         "status": "unsupported",
         "reason": "no supported read-only Elements Connect DC config API identified",
     }
-    assert not (tmp_path / "elements-connect.jsonl").exists()
-    assert not (tmp_path / "associations.jsonl").exists()
+    assert not (tmp_path / "export" / "elements-connect.jsonl").exists()
+    assert not (tmp_path / "export" / "associations.jsonl").exists()
     assert all(request.method == "GET" for request in requests)
 
     assert cli.main(args) == 0
     assert (
-        json.loads((tmp_path / "manifest.json").read_text())["coverage"][
+        json.loads((tmp_path / "export" / "manifest.json").read_text())["coverage"][
             "elements_connect"
         ]
         == coverage["elements_connect"]

@@ -5,36 +5,13 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from jira import cli
+from cli import main as cli
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from pathlib import Path
 
     from _pytest.monkeypatch import MonkeyPatch
-
-
-def fixture(
-    monkeypatch: MonkeyPatch, handler: Callable[[httpx.Request], httpx.Response]
-) -> None:
-    real_client = cli.JiraClient
-    monkeypatch.setenv("JIRA_PAT", "test-pat")
-    monkeypatch.setattr(
-        cli,
-        "JiraClient",
-        lambda url, token: real_client(
-            url,
-            token,
-            requests_per_minute=60_000,
-            transport=httpx.MockTransport(
-                lambda request: (
-                    httpx.Response(404)
-                    if request.url.path.endswith("/rest/api/2/serverInfo")
-                    else handler(request)
-                )
-            ),
-        ),
-    )
+    from conftest import FixtureSetup
 
 
 def records(path: Path) -> list[dict]:
@@ -42,13 +19,15 @@ def records(path: Path) -> list[dict]:
 
 
 def test_cli_exports_screens_tabs_and_placements(
-    tmp_path: Path, monkeypatch: MonkeyPatch
+    tmp_path: Path, monkeypatch: MonkeyPatch, jira_basic_auth_fixture: FixtureSetup
 ) -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         path = request.url.path
+        if path.endswith("/serverInfo"):
+            return httpx.Response(404)
         if path.endswith("/field"):
             return httpx.Response(200, json=[])
         if path.endswith("/customFields"):
@@ -80,11 +59,11 @@ def test_cli_exports_screens_tabs_and_placements(
             )
         raise AssertionError(path)
 
-    fixture(monkeypatch, handler)
-    assert cli.main(["https://jira.example.com", str(tmp_path)]) == 0
-    screens = records(tmp_path / "screens.jsonl")
-    tabs = records(tmp_path / "screen-tabs.jsonl")
-    placements = records(tmp_path / "screen-placements.jsonl")
+    jira_basic_auth_fixture("https://jira.example.com", handler)
+    assert cli.main(["export"]) == 0
+    screens = records(tmp_path / "export" / "screens.jsonl")
+    tabs = records(tmp_path / "export" / "screen-tabs.jsonl")
+    placements = records(tmp_path / "export" / "screen-placements.jsonl")
     assert [row["source"]["id"] for row in screens] == ["10", "11"]
     assert screens[0]["screen"] == {"name": "Screen 0"}
     assert [(row["source"]["id"], row["screen_id"]) for row in tabs] == [
@@ -108,7 +87,9 @@ def test_cli_exports_screens_tabs_and_placements(
         row["schema_version"] == 1 and row["extracted_at"]
         for row in screens + tabs + placements
     )
-    coverage = json.loads((tmp_path / "manifest.json").read_text())["coverage"]
+    coverage = json.loads((tmp_path / "export" / "manifest.json").read_text())[
+        "coverage"
+    ]
     assert coverage["screens"] == {"status": "complete", "count": 2}
     assert coverage["screen_tabs"]["count"] == len(tabs)
     assert coverage["screen_placements"]["count"] == len(placements)
@@ -121,10 +102,12 @@ def test_cli_exports_screens_tabs_and_placements(
 
 
 def test_cli_distinguishes_empty_from_unauthorized_screen_tabs(
-    tmp_path: Path, monkeypatch: MonkeyPatch
+    tmp_path: Path, monkeypatch: MonkeyPatch, jira_basic_auth_fixture: FixtureSetup
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        if path.endswith("/serverInfo"):
+            return httpx.Response(404)
         if path.endswith("/field"):
             return httpx.Response(200, json=[])
         if path.endswith("/customFields"):
@@ -134,25 +117,29 @@ def test_cli_distinguishes_empty_from_unauthorized_screen_tabs(
                 200, json={"values": [{"id": 10, "name": "Main"}], "total": 1}
             )
         if path.endswith("/tabs"):
-            return httpx.Response(403, json={"error": "test-pat"})
+            return httpx.Response(403, json={"error": "Denied"})
         raise AssertionError(path)
 
-    fixture(monkeypatch, handler)
-    assert cli.main(["https://jira.example.com", str(tmp_path)]) == 1
-    coverage = json.loads((tmp_path / "manifest.json").read_text())["coverage"]
+    jira_basic_auth_fixture("https://jira.example.com", handler)
+    assert cli.main(["export"]) == 1
+    coverage = json.loads((tmp_path / "export" / "manifest.json").read_text())[
+        "coverage"
+    ]
     assert coverage["screens"] == {"status": "complete", "count": 1}
     assert coverage["screen_tabs"]["status"] == "unauthorized"
     assert coverage["screen_placements"]["status"] == "not_queried"
-    assert not (tmp_path / "screen-tabs.jsonl").exists()
-    assert "test-pat" not in "".join(
-        p.read_text() for p in tmp_path.iterdir() if p.is_file()
+    assert not (tmp_path / "export" / "screen-tabs.jsonl").exists()
+    assert "private-password" not in "".join(
+        p.read_text() for p in (tmp_path / "export").iterdir() if p.is_file()
     )
 
 
 def test_cli_empty_screens_are_complete(
-    tmp_path: Path, monkeypatch: MonkeyPatch
+    tmp_path: Path, monkeypatch: MonkeyPatch, jira_basic_auth_fixture: FixtureSetup
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/serverInfo"):
+            return httpx.Response(404)
         if request.url.path.endswith("/field"):
             return httpx.Response(200, json=[])
         if request.url.path.endswith("/customFields") or request.url.path.endswith(
@@ -161,28 +148,30 @@ def test_cli_empty_screens_are_complete(
             return httpx.Response(200, json={"values": [], "total": 0})
         raise AssertionError(str(request.url))
 
-    fixture(monkeypatch, handler)
-    assert cli.main(["https://jira.example.com", str(tmp_path)]) == 0
-    coverage = json.loads((tmp_path / "manifest.json").read_text())["coverage"]
+    jira_basic_auth_fixture("https://jira.example.com", handler)
+    assert cli.main(["export"]) == 0
+    coverage = json.loads((tmp_path / "export" / "manifest.json").read_text())[
+        "coverage"
+    ]
     for stage, filename in (
         ("screens", "screens.jsonl"),
         ("screen_tabs", "screen-tabs.jsonl"),
         ("screen_placements", "screen-placements.jsonl"),
     ):
         assert coverage[stage] == {"status": "complete", "count": 0}
-        assert (tmp_path / filename).read_text() == ""
+        assert (tmp_path / "export" / filename).read_text() == ""
 
 
 def test_cli_retries_failed_placements_without_duplication(
-    tmp_path: Path, monkeypatch: MonkeyPatch
+    tmp_path: Path, monkeypatch: MonkeyPatch, jira_basic_auth_fixture: FixtureSetup
 ) -> None:
     attempts = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal attempts
         path = request.url.path
-        if path.endswith("/field"):
-            return httpx.Response(200, json=[])
+        if path.endswith("/serverInfo") or path.endswith("/field"):
+            return httpx.Response(404 if path.endswith("/serverInfo") else 200, json=[])
         if path.endswith("/customFields"):
             return httpx.Response(200, json={"values": [], "total": 0})
         if path.endswith("/screens"):
@@ -193,26 +182,32 @@ def test_cli_retries_failed_placements_without_duplication(
             return httpx.Response(200, json=[{"id": 5, "name": "Tab"}])
         if path.endswith("/fields"):
             attempts += 1
-            if attempts == 1:
-                return httpx.Response(503, json={"error": "test-pat"})
-            return httpx.Response(200, json=[{"id": "summary"}, {"id": "summary"}])
+            return httpx.Response(
+                503 if attempts == 1 else 200,
+                json={"error": "Error"}
+                if attempts == 1
+                else [{"id": "summary"}, {"id": "summary"}],
+            )
         raise AssertionError(path)
 
-    fixture(monkeypatch, handler)
-    args = ["https://jira.example.com", str(tmp_path)]
+    jira_basic_auth_fixture("https://jira.example.com", handler)
+    args = ["export"]
     assert cli.main(args) == 1
-    coverage = json.loads((tmp_path / "manifest.json").read_text())["coverage"]
+    coverage = json.loads((tmp_path / "export" / "manifest.json").read_text())[
+        "coverage"
+    ]
     assert coverage["screen_placements"]["status"] == "failed"
-    assert not (tmp_path / "screen-placements.jsonl").exists()
+    assert not (tmp_path / "export" / "screen-placements.jsonl").exists()
     assert cli.main(args) == 0
     expected_attempts = 2  # first attempt and full-stage retry
     assert attempts == expected_attempts
     assert [
-        row["source"]["id"] for row in records(tmp_path / "screen-placements.jsonl")
+        row["source"]["id"]
+        for row in records(tmp_path / "export" / "screen-placements.jsonl")
     ] == ["10:5:summary"]
-    assert json.loads((tmp_path / "checkpoint.json").read_text())["stages"][
+    assert json.loads((tmp_path / "export" / "checkpoint.json").read_text())["stages"][
         "screen_placements"
     ] == {"status": "complete", "count": 1}
-    assert "test-pat" not in "".join(
-        p.read_text() for p in tmp_path.iterdir() if p.is_file()
+    assert "private-password" not in "".join(
+        p.read_text() for p in (tmp_path / "export").iterdir() if p.is_file()
     )

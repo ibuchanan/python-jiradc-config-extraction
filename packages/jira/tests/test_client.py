@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from base64 import b64encode
 from datetime import timedelta
 
 import httpx
@@ -12,7 +13,7 @@ from jira.client import JiraClient, SpacingRateLimiter, _retry_after_seconds
 
 
 @pytest.mark.anyio
-async def test_get_preserves_context_path_and_sends_bearer_token() -> None:
+async def test_get_preserves_context_path_and_sends_basic_auth() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -21,7 +22,8 @@ async def test_get_preserves_context_path_and_sends_bearer_token() -> None:
 
     async with JiraClient(
         "https://jira.example.com/jira/",
-        "secret",
+        user="admin",
+        password="secret",
         requests_per_minute=60_000,
         transport=httpx.MockTransport(handler),
     ) as client:
@@ -32,7 +34,28 @@ async def test_get_preserves_context_path_and_sends_bearer_token() -> None:
         str(requests[0].url)
         == "https://jira.example.com/jira/rest/api/2/field?startAt=0"
     )
-    assert requests[0].headers["Authorization"] == "Bearer secret"
+    assert requests[0].headers["Authorization"].startswith("Basic ")
+
+
+@pytest.mark.anyio
+async def test_get_uses_basic_auth_with_user_and_password() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    async with JiraClient(
+        "https://jira.example.com",
+        user="admin",
+        password="private-password",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        await client.get("/rest/api/2/field")
+
+    expected = b64encode(b"admin:private-password").decode("ascii")
+    assert requests[0].headers["Authorization"] == f"Basic {expected}"
+    assert "private-password" not in str(requests[0].url)
 
 
 @pytest.mark.anyio
@@ -56,7 +79,8 @@ async def test_get_retries_429_then_succeeds(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr("jira.client.asyncio.sleep", fake_sleep)
     async with JiraClient(
         "https://jira.example.com",
-        "token",
+        user="admin",
+        password="secret",
         requests_per_minute=60_000,
         transport=httpx.MockTransport(handler),
     ) as client:
@@ -76,7 +100,8 @@ async def test_get_stops_after_max_retries() -> None:
 
     async with JiraClient(
         "https://jira.example.com",
-        "token",
+        user="admin",
+        password="secret",
         requests_per_minute=60_000,
         transport=httpx.MockTransport(handler),
     ) as client:

@@ -5,42 +5,33 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from jira import cli
+from cli import main as cli
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
     from _pytest.monkeypatch import MonkeyPatch
+    from conftest import FixtureSetup
 
 
-def use_fixture(
-    monkeypatch: MonkeyPatch, handler: Callable[[httpx.Request], httpx.Response]
-) -> None:
-    real_client = cli.JiraClient
-    monkeypatch.setattr(
-        cli,
-        "JiraClient",
-        lambda url, token: real_client(
-            url,
-            token,
-            requests_per_minute=60_000,
-            transport=httpx.MockTransport(
-                lambda request: (
-                    httpx.Response(404)
-                    if request.url.path.endswith("/rest/api/2/serverInfo")
-                    else httpx.Response(200, json={"values": [], "total": 0})
-                    if request.url.path.endswith("/rest/api/2/screens")
-                    else handler(request)
-                )
-            ),
-        ),
-    )
-    monkeypatch.setenv("JIRA_PAT", "test-pat")
+def _make_fixture_handler(
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> Callable[[httpx.Request], httpx.Response]:
+    """Wrap a handler with default responses for common endpoints."""
+
+    def combined_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/rest/api/2/serverInfo"):
+            return httpx.Response(404)
+        if request.url.path.endswith("/rest/api/2/screens"):
+            return httpx.Response(200, json={"values": [], "total": 0})
+        return handler(request)
+
+    return combined_handler
 
 
 def test_cli_exports_field_applicability_and_options(
-    tmp_path: Path, monkeypatch: MonkeyPatch
+    tmp_path: Path, monkeypatch: MonkeyPatch, jira_basic_auth_fixture: FixtureSetup
 ) -> None:
     requests: list[httpx.Request] = []
 
@@ -79,11 +70,14 @@ def test_cli_exports_field_applicability_and_options(
             )
         raise AssertionError(f"Unexpected path {path}")
 
-    use_fixture(monkeypatch, handler)
-    assert cli.main(["https://jira.example.com", str(tmp_path)]) == 0
+    jira_basic_auth_fixture("https://jira.example.com", _make_fixture_handler(handler))
+
+    assert cli.main(["export"]) == 0
     contexts = [
         json.loads(line)
-        for line in (tmp_path / "field-contexts.jsonl").read_text().splitlines()
+        for line in (tmp_path / "export" / "field-contexts.jsonl")
+        .read_text()
+        .splitlines()
     ]
     assert len(contexts) == 1
     assert contexts[0]["source"] == {
@@ -97,7 +91,9 @@ def test_cli_exports_field_applicability_and_options(
     assert contexts[0]["issue_type_ids"] == ["1"]
     options = [
         json.loads(line)
-        for line in (tmp_path / "field-options.jsonl").read_text().splitlines()
+        for line in (tmp_path / "export" / "field-options.jsonl")
+        .read_text()
+        .splitlines()
     ]
     assert [
         (row["source"]["id"], row["field_id"], row["value"], row["disabled"])
@@ -106,14 +102,14 @@ def test_cli_exports_field_applicability_and_options(
         ("customfield_10000:7", "customfield_10000", "Blue", False),
         ("customfield_10000:8", "customfield_10000", "Green", True),
     ]
-    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    manifest = json.loads((tmp_path / "export" / "manifest.json").read_text())
     assert manifest["coverage"]["field_configurations"]["status"] == "unsupported"
     assert manifest["coverage"]["explicit_field_contexts"]["status"] == "unsupported"
     assert all(request.method == "GET" for request in requests)
 
 
 def test_cli_paginates_applicability_and_options(
-    tmp_path: Path, monkeypatch: MonkeyPatch
+    tmp_path: Path, monkeypatch: MonkeyPatch, jira_basic_auth_fixture: FixtureSetup
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -138,15 +134,20 @@ def test_cli_paginates_applicability_and_options(
             )
         raise AssertionError(path)
 
-    use_fixture(monkeypatch, handler)
-    assert cli.main(["https://jira.example.com", str(tmp_path)]) == 0
+    jira_basic_auth_fixture("https://jira.example.com", _make_fixture_handler(handler))
+
+    assert cli.main(["export"]) == 0
     contexts = [
         json.loads(line)
-        for line in (tmp_path / "field-contexts.jsonl").read_text().splitlines()
+        for line in (tmp_path / "export" / "field-contexts.jsonl")
+        .read_text()
+        .splitlines()
     ]
     options = [
         json.loads(line)
-        for line in (tmp_path / "field-options.jsonl").read_text().splitlines()
+        for line in (tmp_path / "export" / "field-options.jsonl")
+        .read_text()
+        .splitlines()
     ]
     assert [row["project_ids"] for row in contexts] == [["2"]]
     assert [row["source"]["id"] for row in options] == [
@@ -156,29 +157,32 @@ def test_cli_paginates_applicability_and_options(
 
 
 def test_cli_reports_unauthorized_applicability_without_claiming_empty(
-    tmp_path: Path, monkeypatch: MonkeyPatch
+    tmp_path: Path, monkeypatch: MonkeyPatch, jira_basic_auth_fixture: FixtureSetup
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/field"):
             return httpx.Response(200, json=[])
         if request.url.path.endswith("/customFields"):
-            return httpx.Response(403, json={"error": "test-pat"})
+            return httpx.Response(403, json={"error": "Denied"})
         raise AssertionError(str(request.url))
 
-    use_fixture(monkeypatch, handler)
-    assert cli.main(["https://jira.example.com", str(tmp_path)]) == 1
-    assert not (tmp_path / "field-contexts.jsonl").exists()
-    manifest = json.loads((tmp_path / "manifest.json").read_text())
-    checkpoint = json.loads((tmp_path / "checkpoint.json").read_text())
+    jira_basic_auth_fixture("https://jira.example.com", _make_fixture_handler(handler))
+
+    assert cli.main(["export"]) == 1
+    assert not (tmp_path / "export" / "field-contexts.jsonl").exists()
+    manifest = json.loads((tmp_path / "export" / "manifest.json").read_text())
+    checkpoint = json.loads((tmp_path / "export" / "checkpoint.json").read_text())
     assert manifest["coverage"]["field_applicability"]["status"] == "unauthorized"
     forbidden = 403
     assert checkpoint["stages"]["field_applicability"]["http_status"] == forbidden
-    assert "test-pat" not in "".join(path.read_text() for path in tmp_path.iterdir())
+    assert "private-password" not in "".join(
+        path.read_text() for path in (tmp_path / "export").iterdir()
+    )
     assert manifest["coverage"]["field_options"] == {"status": "complete", "count": 0}
 
 
 def test_cli_reports_unsupported_options_and_empty_applicability(
-    tmp_path: Path, monkeypatch: MonkeyPatch
+    tmp_path: Path, monkeypatch: MonkeyPatch, jira_basic_auth_fixture: FixtureSetup
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/field"):
@@ -186,21 +190,26 @@ def test_cli_reports_unsupported_options_and_empty_applicability(
         if request.url.path.endswith("/customFields"):
             return httpx.Response(200, json={"values": [], "total": 0})
         if request.url.path.endswith("/options"):
-            return httpx.Response(404, json={"error": "test-pat"})
+            return httpx.Response(404, json={"error": "Not found"})
         raise AssertionError(str(request.url))
 
-    use_fixture(monkeypatch, handler)
-    assert cli.main(["https://jira.example.com", str(tmp_path)]) == 1
-    assert (tmp_path / "field-contexts.jsonl").read_text() == ""
-    assert not (tmp_path / "field-options.jsonl").exists()
-    coverage = json.loads((tmp_path / "manifest.json").read_text())["coverage"]
+    jira_basic_auth_fixture("https://jira.example.com", _make_fixture_handler(handler))
+
+    assert cli.main(["export"]) == 1
+    assert (tmp_path / "export" / "field-contexts.jsonl").read_text() == ""
+    assert not (tmp_path / "export" / "field-options.jsonl").exists()
+    coverage = json.loads((tmp_path / "export" / "manifest.json").read_text())[
+        "coverage"
+    ]
     assert coverage["field_applicability"] == {"status": "complete", "count": 0}
     assert coverage["field_options"]["status"] == "unsupported"
-    assert "test-pat" not in (tmp_path / "checkpoint.json").read_text()
+    assert (
+        "private-password" not in (tmp_path / "export" / "checkpoint.json").read_text()
+    )
 
 
 def test_cli_retries_incomplete_options_without_duplication(
-    tmp_path: Path, monkeypatch: MonkeyPatch
+    tmp_path: Path, monkeypatch: MonkeyPatch, jira_basic_auth_fixture: FixtureSetup
 ) -> None:
     attempts = 0
 
@@ -219,11 +228,12 @@ def test_cli_retries_incomplete_options_without_duplication(
             )
         raise AssertionError(str(request.url))
 
-    use_fixture(monkeypatch, handler)
-    args = ["https://jira.example.com", str(tmp_path)]
+    jira_basic_auth_fixture("https://jira.example.com", _make_fixture_handler(handler))
+
+    args = ["export"]
     assert cli.main(args) == 1
     assert (
-        json.loads((tmp_path / "checkpoint.json").read_text())["stages"][
+        json.loads((tmp_path / "export" / "checkpoint.json").read_text())["stages"][
             "field_options"
         ]["status"]
         == "failed"
@@ -231,7 +241,9 @@ def test_cli_retries_incomplete_options_without_duplication(
     assert cli.main(args) == 0
     expected_attempts = 2
     assert attempts == expected_attempts
-    assert len((tmp_path / "field-options.jsonl").read_text().splitlines()) == 1
-    assert json.loads((tmp_path / "checkpoint.json").read_text())["stages"][
+    assert (
+        len((tmp_path / "export" / "field-options.jsonl").read_text().splitlines()) == 1
+    )
+    assert json.loads((tmp_path / "export" / "checkpoint.json").read_text())["stages"][
         "field_options"
     ] == {"status": "complete", "count": 1}

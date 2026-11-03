@@ -6,10 +6,13 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
+from typing import Any
 
 import httpx
 from httpx_limiter import AsyncRateLimitedTransport, Rate
 from httpx_limiter.abstract_async_limiter import AbstractAsyncLimiter
+
+from . import extraction
 
 DEFAULT_REQUESTS_PER_MINUTE = 60
 MAX_RETRIES = 3
@@ -51,8 +54,9 @@ class JiraClient:
     def __init__(
         self,
         base_url: str,
-        token: str,
         *,
+        user: str,
+        password: str,
         requests_per_minute: int = DEFAULT_REQUESTS_PER_MINUTE,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
@@ -68,7 +72,8 @@ class JiraClient:
         )
         self._http = httpx.AsyncClient(
             base_url=f"{self.base_url}/",
-            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            auth=httpx.BasicAuth(user, password),
+            headers={"Accept": "application/json"},
             timeout=30.0,
             transport=rate_limited_transport,
         )
@@ -101,6 +106,67 @@ class JiraClient:
             logger.warning("Jira returned 429; retrying after %.1f seconds", delay)
             await asyncio.sleep(delay)
         raise AssertionError("unreachable")
+
+    async def field_inventory(self) -> list[dict[str, Any]]:
+        """Extract custom field inventory.
+
+        Returns list of dicts with schema_version, source, extracted_at, and field data.
+        Raises JiraError on validation or HTTP errors.
+        """
+        return await extraction.field_inventory(self)
+
+    async def server_version(self) -> str | None:
+        """Extract Jira server version.
+
+        Returns version string or None on error or if endpoint unavailable.
+        Raises JiraError on non-404 HTTP errors.
+        """
+        return await extraction.server_version(self)
+
+    async def field_applicability(self, field_ids: list[str]) -> list[dict[str, Any]]:
+        """Extract field applicability data for given field IDs.
+
+        Returns list of normalized records.
+        Raises JiraError on validation or HTTP errors.
+        """
+        return await extraction.field_applicability(self, field_ids)
+
+    async def field_options(self, field_ids: list[str]) -> list[dict[str, Any]]:
+        """Extract field options for given custom field IDs.
+
+        Returns list of normalized records.
+        Raises JiraError on validation or HTTP errors.
+        """
+        return await extraction.field_options(self, field_ids)
+
+    async def screens(self) -> list[dict[str, Any]]:
+        """Extract screens.
+
+        Returns list of normalized records.
+        Raises JiraError on validation or HTTP errors.
+        """
+        return await extraction.screens(self)
+
+    async def screen_tabs(self, screen_ids: list[str]) -> list[dict[str, Any]]:
+        """Extract screen tabs for given screen IDs.
+
+        Returns list of normalized records.
+        Raises JiraError on validation or HTTP errors.
+        """
+        return await extraction.screen_tabs(self, screen_ids)
+
+    async def screen_placements(
+        self, tabs: list[tuple[str, str]]
+    ) -> list[dict[str, Any]]:
+        """Extract screen field placements for given (screen_id, tab_id) tuples.
+
+        Args:
+            tabs: List of (screen_id, tab_id) tuples.
+
+        Returns list of normalized records sorted by (screen_id, tab_id, position).
+        Raises JiraError on validation or HTTP errors.
+        """
+        return await extraction.screen_placements(self, tabs)
 
 
 def _retry_after_seconds(value: str | None) -> float:

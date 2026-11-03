@@ -27,12 +27,12 @@ async def test_get_preserves_context_path_and_sends_basic_auth() -> None:
         requests_per_minute=60_000,
         transport=httpx.MockTransport(handler),
     ) as client:
-        response = await client.get("/rest/api/2/field", params={"startAt": 0})
+        response = await client.call("getCustomFields", startAt=0)
 
     assert response.json() == {"ok": True}
     assert (
         str(requests[0].url)
-        == "https://jira.example.com/jira/rest/api/2/field?startAt=0"
+        == "https://jira.example.com/jira/rest/api/2/customFields?startAt=0"
     )
     assert requests[0].headers["Authorization"].startswith("Basic ")
 
@@ -51,7 +51,7 @@ async def test_get_uses_basic_auth_with_user_and_password() -> None:
         password="private-password",
         transport=httpx.MockTransport(handler),
     ) as client:
-        await client.get("/rest/api/2/field")
+        await client.call("getFields")
 
     expected = b64encode(b"admin:private-password").decode("ascii")
     assert requests[0].headers["Authorization"] == f"Basic {expected}"
@@ -84,7 +84,7 @@ async def test_get_retries_429_then_succeeds(monkeypatch: pytest.MonkeyPatch) ->
         requests_per_minute=60_000,
         transport=httpx.MockTransport(handler),
     ) as client:
-        response = await client.get("/rest/api/2/field")
+        response = await client.call("getFields")
 
     expected_requests = 2
     retry_delay = 2.0
@@ -106,7 +106,26 @@ async def test_get_stops_after_max_retries() -> None:
         transport=httpx.MockTransport(handler),
     ) as client:
         with pytest.raises(httpx.HTTPStatusError):
-            await client.get("/rest/api/2/field")
+            await client.call("getFields")
+
+
+@pytest.mark.anyio
+async def test_call_rejects_mutating_openapi_operation() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={})
+
+    async with JiraClient(
+        "https://jira.example.com",
+        user="admin",
+        password="secret",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        with pytest.raises(ValueError, match="Unsupported read-only"):
+            await client.call("createIssue", summary="unsafe")
+    assert requests == []
 
 
 def test_retry_after_parses_seconds_and_invalid_values() -> None:

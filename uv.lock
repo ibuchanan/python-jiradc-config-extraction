@@ -154,12 +154,14 @@ source = { editable = "packages/jira" }
 dependencies = [
     { name = "httpx" },
     { name = "httpx-limiter" },
+    { name = "openapi-httpx-client" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "httpx-limiter", specifier = ">=0.6.1" },
+    { name = "openapi-httpx-client", specifier = ">=0.5.0" },
 ]
 
 [[package]]
@@ -193,6 +195,19 @@ dev = [
     { name = "pytest", specifier = ">=9.2.0" },
     { name = "ruff", specifier = ">=0.17.3" },
     { name = "ty", specifier = ">=0.0.94" },
+]
+
+[[package]]
+name = "openapi-httpx-client"
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/dc/a8/6e4a43f5b733ee47045c93052cb789a41e344dcc31eb162cdbd6412051ea/openapi_httpx_client-0.5.0.tar.gz", hash = "sha256:1f15310f254eb796369d8e84945e8e4da9d503d3ed10aa000e09ef5942fa9bfe", size = 22926, upload-time = "2026-09-07T05:20:20.708Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4c/de/8d7f81a3733dd0f9c795ff6f7da04e183ac4d6fcbb6c9989477348ccc10a/openapi_httpx_client-0.5.0-py3-none-any.whl", hash = "sha256:161fc22b10e11814665e474d9d1b5a5f425a364eed18463ab7096119dccdfe59", size = 18709, upload-time = "2026-09-07T05:20:24.308Z" },
 ]
 
 [[package]]

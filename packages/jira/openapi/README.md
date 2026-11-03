@@ -1,6 +1,6 @@
 # Jira Data Center OpenAPI specification
 
-The checked-in `jira_software_dc_11.2.1_swagger.v3.json` is the OpenAPI 3.0.1 specification downloaded from:
+The checked-in [`jira_software_dc_11.2.1_swagger.v3.json`](../src/jira/jira_software_dc_11.2.1_swagger.v3.json) is the OpenAPI 3.0.1 specification downloaded from:
 
 <https://dac-static.atlassian.com/server/jira/platform/jira_software_dc_11002_swagger.v3.json>
 

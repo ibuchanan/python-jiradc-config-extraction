@@ -63,7 +63,7 @@ async def field_inventory(client: JiraClient) -> list[dict[str, object]]:
     """
     endpoint = "/rest/api/2/field"
     try:
-        response = await client.get(endpoint)
+        response = await client.call("getFields")
         fields = response.json()
     except httpx.HTTPStatusError as exc:
         raise _map_http_error(exc) from exc
@@ -124,9 +124,8 @@ async def server_version(client: JiraClient) -> str | None:
     Returns version string or None on error.
     Raises JiraError on non-404 HTTP errors.
     """
-    endpoint = "/rest/api/2/serverInfo"
     try:
-        response = await client.get(endpoint)
+        response = await client.call("getServerInfo")
         info = response.json()
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code in _UNSUPPORTED_CODES:
@@ -161,7 +160,7 @@ async def field_applicability(
     try:
         start = 0
         while True:
-            response = await client.get(endpoint, params={"startAt": start})
+            response = await client.call("getCustomFields", startAt=start)
             payload = response.json()
 
             if (
@@ -238,8 +237,11 @@ async def field_options(
             seen = 0
 
             while True:
-                response = await client.get(
-                    endpoint, params={"page": page, "useAllContexts": True}
+                response = await client.call(
+                    "getCustomFieldOptions",
+                    customFieldId=num,
+                    page=page,
+                    useAllContexts=True,
                 )
                 payload = response.json()
 
@@ -313,7 +315,7 @@ async def screens(client: JiraClient) -> list[dict[str, object]]:
     try:
         start = 0
         while True:
-            response = await client.get(endpoint, params={"startAt": start})
+            response = await client.call("getAllScreens", startAt=start)
             payload = response.json()
 
             if (
@@ -382,7 +384,7 @@ async def screen_tabs(
     try:
         for screen_id in screen_ids:
             endpoint = f"/rest/api/2/screens/{screen_id}/tabs"
-            response = await client.get(endpoint)
+            response = await client.call("getAllTabs", screenId=screen_id)
             tabs = response.json()
 
             if not isinstance(tabs, list):
@@ -441,7 +443,9 @@ async def screen_placements(
     try:
         for screen_id, tab_id in tabs:
             endpoint = f"/rest/api/2/screens/{screen_id}/tabs/{tab_id}/fields"
-            response = await client.get(endpoint)
+            response = await client.call(
+                "getAllFields", screenId=screen_id, tabId=tab_id
+            )
             fields = response.json()
 
             if not isinstance(fields, list):

@@ -3,19 +3,33 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
+from importlib.resources import files
 from typing import Any
 
 import httpx
 from httpx_limiter import AsyncRateLimitedTransport, Rate
 from httpx_limiter.abstract_async_limiter import AbstractAsyncLimiter
+from openapiclient import OpenAPIClient
 
 from . import extraction
 
 DEFAULT_REQUESTS_PER_MINUTE = 60
 MAX_RETRIES = 3
+READ_OPERATIONS = frozenset(
+    {
+        "getFields",
+        "getServerInfo",
+        "getCustomFields",
+        "getCustomFieldOptions",
+        "getAllScreens",
+        "getAllTabs",
+        "getAllFields",
+    }
+)
 logger = logging.getLogger(__name__)
 
 
@@ -70,8 +84,14 @@ class JiraClient:
             limiter=limiter,
             transport=transport or httpx.AsyncHTTPTransport(),
         )
-        self._http = httpx.AsyncClient(
-            base_url=f"{self.base_url}/",
+        definition = json.loads(
+            files("jira")
+            .joinpath("jira_software_dc_11.2.1_swagger.v3.json")
+            .read_text(encoding="utf-8")
+        )
+        definition["servers"] = [{"url": f"{self.base_url}/rest"}]
+        self._api = OpenAPIClient(definition=definition)
+        self._operations = self._api.AsyncClient(
             auth=httpx.BasicAuth(user, password),
             headers={"Accept": "application/json"},
             timeout=30.0,
@@ -79,24 +99,29 @@ class JiraClient:
         )
 
     async def __aenter__(self) -> JiraClient:
+        await self._operations.__aenter__()
         return self
 
     async def __aexit__(self, *_: object) -> None:
         await self.aclose()
 
     async def aclose(self) -> None:
-        await self._http.aclose()
+        await self._operations.__aexit__(None, None, None)
 
-    async def get(
-        self,
-        path: str,
-        *,
-        params: dict[str, str | int | float | bool | None] | None = None,
+    async def call(
+        self, operation: str, **parameters: str | int | bool
     ) -> httpx.Response:
-        """GET a Jira REST path, retrying 429 responses up to a fixed limit."""
-        relative_path = path.lstrip("/")
+        """Call a supported read-only OpenAPI operation with bounded 429 retries."""
+        if operation not in READ_OPERATIONS:
+            raise ValueError("Unsupported read-only Jira operation")
         for attempt in range(MAX_RETRIES + 1):
-            response = await self._http.get(relative_path, params=params)
+            result = await self._operations[operation](**parameters)
+            response = httpx.Response(
+                result["status"],
+                json=result["data"],
+                headers=result["headers"],
+                request=httpx.Request("GET", self.base_url),
+            )
             if response.status_code != httpx.codes.TOO_MANY_REQUESTS:
                 response.raise_for_status()
                 return response

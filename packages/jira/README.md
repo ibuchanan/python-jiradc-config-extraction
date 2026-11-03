@@ -1,6 +1,6 @@
 # jira
 
-Minimal asynchronous Jira Data Center API client and version-pinned OpenAPI spec container for the configuration extraction project.
+Asynchronous Jira Data Center API client backed by the bundled 11.2.1 OpenAPI definition and `openapi-httpx-client` operation methods.
 
 ```python
 import asyncio
@@ -11,7 +11,7 @@ async def main() -> None:
     async with JiraClient(
         "https://jira.example.com", user="admin", password="..."
     ) as client:
-        response = await client.get("/rest/api/2/field")
+        response = await client.call("getFields")
         print(response.json())
 
 

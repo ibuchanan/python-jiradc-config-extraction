@@ -156,3 +156,31 @@ async def test_spacing_limiter_spaces_requests(monkeypatch: pytest.MonkeyPatch) 
         pass
 
     assert waits == [0.5]
+
+
+@pytest.mark.anyio
+async def test_rate_limit_callback_receives_each_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = [
+        httpx.Response(429, headers={"Retry-After": "30"}),
+        httpx.Response(429, headers={"Retry-After": "5"}),
+        httpx.Response(200, json=[]),
+    ]
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("jira.client.asyncio.sleep", no_sleep)
+    waits: list[float] = []
+    async with JiraClient(
+        "https://jira.example.com",
+        user="admin",
+        password="secret",
+        requests_per_minute=60_000,
+        transport=httpx.MockTransport(lambda _request: responses.pop(0)),
+        on_rate_limit=waits.append,
+    ) as client:
+        await client.call("getFields")
+
+    assert waits == [30.0, 5.0]

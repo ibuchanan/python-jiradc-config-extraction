@@ -34,12 +34,12 @@ def test_cli_summarizes_empty_queried_stages_and_optional_app_gaps(
         if path.endswith("/field"):
             return httpx.Response(200, json=[])
         if path.endswith(("/customFields", "/screens")):
-            return httpx.Response(200, json={"values": [], "total": 0})
+            return httpx.Response(200, json={"values": [], "screens": [], "total": 0})
         raise AssertionError(path)
 
     jira_basic_auth_fixture("https://jira.example.com", respond)
 
-    assert cli.main(["export"]) == 0
+    assert cli.main(["export", "export"]) == 0
     manifest = json.loads((tmp_path / "export" / "manifest.json").read_text())
     assert manifest["jira_version"] == "11.2.1"
     assert manifest["app_versions"] == {}
@@ -74,7 +74,7 @@ def test_field_failure_reports_not_queried_stages(
         return httpx.Response(503)
 
     jira_basic_auth_fixture("https://jira.example.com", respond)
-    assert cli.main(["export"]) == 1
+    assert cli.main(["export", "export"]) == 1
     coverage = json.loads((tmp_path / "export" / "manifest.json").read_text())[
         "coverage"
     ]
@@ -100,16 +100,18 @@ def test_unsupported_queried_jira_stage_is_incomplete(
         if path.endswith("/field"):
             return httpx.Response(200, json=[{"id": "customfield_1", "custom": True}])
         if path.endswith("/customFields"):
-            return httpx.Response(200, json={"values": [], "total": 0})
+            return httpx.Response(200, json={"values": [], "screens": [], "total": 0})
         if path.endswith("/options"):
             return httpx.Response(404)
         if path.endswith("/screens"):
-            return httpx.Response(200, json={"values": [], "total": 0})
+            return httpx.Response(200, json={"values": [], "screens": [], "total": 0})
         raise AssertionError(path)
 
     jira_basic_auth_fixture("https://jira.example.com", respond)
-    assert cli.main(["export"]) == 1
-    assert re.search(r"(?m)^field_options\s+unsupported\s*$", capsys.readouterr().out)
+    assert cli.main(["export", "export"]) == 1
+    assert re.search(
+        r"(?m)^custom_field_options\s+unsupported\s*$", capsys.readouterr().out
+    )
     assert (tmp_path / "export" / "fields.jsonl").exists()
 
 
@@ -134,21 +136,19 @@ def test_cli_fails_on_required_jira_stage_and_preserves_retryable_data(
             calls += 1
             if calls == 1:
                 return httpx.Response(403, json={"error": "Denied"})
-            return httpx.Response(200, json={"values": [], "total": 0})
+            return httpx.Response(200, json={"values": [], "screens": [], "total": 0})
         if path.endswith("/screens"):
-            return httpx.Response(200, json={"values": [], "total": 0})
+            return httpx.Response(200, json={"values": [], "screens": [], "total": 0})
         raise AssertionError(path)
 
     jira_basic_auth_fixture("https://jira.example.com", respond)
-    args = ["export"]
+    args = ["export", "export"]
     assert cli.main(args) != 0
     manifest = json.loads((tmp_path / "export" / "manifest.json").read_text())
     assert manifest["jira_version"] is None
-    assert manifest["coverage"]["field_applicability"]["status"] == "unauthorized"
+    assert manifest["coverage"]["custom_fields"]["status"] == "unauthorized"
     assert (tmp_path / "export" / "fields.jsonl").exists()
-    assert re.search(
-        r"(?m)^field_applicability\s+unauthorized\s*$", capsys.readouterr().out
-    )
+    assert re.search(r"(?m)^custom_fields\s+unauthorized\s*$", capsys.readouterr().out)
     assert cli.main(args) == 0
     expected_attempts = 2
     assert calls == expected_attempts

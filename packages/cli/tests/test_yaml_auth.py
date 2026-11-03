@@ -33,11 +33,11 @@ def test_cli_uses_yaml_user_and_password(
             return httpx.Response(200, json=[])
         if request.url.path.endswith("/rest/api/2/serverInfo"):
             return httpx.Response(404)
-        return httpx.Response(200, json={"values": [], "total": 0})
+        return httpx.Response(200, json={"values": [], "screens": [], "total": 0})
 
     jira_basic_auth_fixture("https://jira.example.com/jira", handler)
 
-    assert cli.main(["export"]) == 0
+    assert cli.main(["export", "export"]) == 0
     assert (
         json.loads((tmp_path / "export" / "manifest.json").read_text())["coverage"][
             "fields"
@@ -48,15 +48,15 @@ def test_cli_uses_yaml_user_and_password(
     assert requests[0].headers["Authorization"].startswith("Basic ")
     assert "private-password" not in str(requests[0].url) + str(capsys.readouterr())
 
-    assert cli.main(["report[qa]"]) == 0
-    assert "report[qa]/fields.jsonl" in capsys.readouterr().out
+    assert cli.main(["export", "report[qa]"]) == 0
+    assert "report[qa]" in capsys.readouterr().out  # shown, not read as markup
 
 
 def test_cli_reports_missing_config_without_secret(
     tmp_path: Path, monkeypatch: MonkeyPatch, capsys: CaptureFixture[str]
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    assert cli.main(["export"]) == 1
+    assert cli.main(["export", "export"]) == 1
     assert "Jira configuration unavailable" in capsys.readouterr().err
     assert not (tmp_path / "export").exists()
 
@@ -67,4 +67,7 @@ def test_cli_exits_with_status_2_for_two_positional_args(
     """Test that CLI exits with status 2 when given two positional arguments."""
     monkeypatch.chdir(tmp_path)
     exit_code_for_usage_error = 2
-    assert cli.main(["https://jira.example.com", "output"]) == exit_code_for_usage_error
+    assert (
+        cli.main(["export", "https://jira.example.com", "output"])
+        == exit_code_for_usage_error
+    )

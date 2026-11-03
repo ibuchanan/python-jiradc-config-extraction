@@ -28,12 +28,12 @@ def test_cli_reports_dynamic_forms_not_queried_without_supported_api(
         if request.url.path.endswith("/customFields") or request.url.path.endswith(
             "/screens"
         ):
-            return httpx.Response(200, json={"values": [], "total": 0})
+            return httpx.Response(200, json={"values": [], "screens": [], "total": 0})
         raise AssertionError(f"Unexpected API request: {request.url.path}")
 
     jira_basic_auth_fixture("https://jira.example.com", respond)
 
-    args = ["export"]
+    args = ["export", "export"]
     assert cli.main(args) == 0
     coverage = json.loads((tmp_path / "export" / "manifest.json").read_text())[
         "coverage"

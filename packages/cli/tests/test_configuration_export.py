@@ -1,4 +1,4 @@
-"""Public CLI export of Jira DC field applicability and options."""
+"""Public CLI export of Jira DC custom fields and their options."""
 
 import json
 from typing import TYPE_CHECKING
@@ -24,13 +24,13 @@ def _make_fixture_handler(
         if request.url.path.endswith("/rest/api/2/serverInfo"):
             return httpx.Response(404)
         if request.url.path.endswith("/rest/api/2/screens"):
-            return httpx.Response(200, json={"values": [], "total": 0})
+            return httpx.Response(200, json={"values": [], "screens": [], "total": 0})
         return handler(request)
 
     return combined_handler
 
 
-def test_cli_exports_field_applicability_and_options(
+def test_cli_exports_custom_fields_and_options(
     tmp_path: Path, monkeypatch: MonkeyPatch, jira_basic_auth_fixture: FixtureSetup
 ) -> None:
     requests: list[httpx.Request] = []
@@ -72,17 +72,17 @@ def test_cli_exports_field_applicability_and_options(
 
     jira_basic_auth_fixture("https://jira.example.com", _make_fixture_handler(handler))
 
-    assert cli.main(["export"]) == 0
+    assert cli.main(["export", "export"]) == 0
     contexts = [
         json.loads(line)
-        for line in (tmp_path / "export" / "field-contexts.jsonl")
+        for line in (tmp_path / "export" / "custom-fields.jsonl")
         .read_text()
         .splitlines()
     ]
     assert len(contexts) == 1
     assert contexts[0]["source"] == {
         "system": "jira",
-        "entity": "field_applicability",
+        "entity": "custom_fields",
         "id": "customfield_10000",
         "endpoint": "/rest/api/2/customFields",
     }
@@ -91,7 +91,7 @@ def test_cli_exports_field_applicability_and_options(
     assert contexts[0]["issue_type_ids"] == ["1"]
     options = [
         json.loads(line)
-        for line in (tmp_path / "export" / "field-options.jsonl")
+        for line in (tmp_path / "export" / "custom-field-options.jsonl")
         .read_text()
         .splitlines()
     ]
@@ -103,12 +103,12 @@ def test_cli_exports_field_applicability_and_options(
         ("customfield_10000:8", "customfield_10000", "Green", True),
     ]
     manifest = json.loads((tmp_path / "export" / "manifest.json").read_text())
-    assert manifest["coverage"]["field_configurations"]["status"] == "unsupported"
-    assert manifest["coverage"]["explicit_field_contexts"]["status"] == "unsupported"
+    assert "field_configurations" not in manifest["coverage"]
+    assert "field_config_schemes" not in manifest["coverage"]
     assert all(request.method == "GET" for request in requests)
 
 
-def test_cli_paginates_applicability_and_options(
+def test_cli_paginates_custom_fields_and_options(
     tmp_path: Path, monkeypatch: MonkeyPatch, jira_basic_auth_fixture: FixtureSetup
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -136,27 +136,27 @@ def test_cli_paginates_applicability_and_options(
 
     jira_basic_auth_fixture("https://jira.example.com", _make_fixture_handler(handler))
 
-    assert cli.main(["export"]) == 0
+    assert cli.main(["export", "export"]) == 0
     contexts = [
         json.loads(line)
-        for line in (tmp_path / "export" / "field-contexts.jsonl")
+        for line in (tmp_path / "export" / "custom-fields.jsonl")
         .read_text()
         .splitlines()
     ]
     options = [
         json.loads(line)
-        for line in (tmp_path / "export" / "field-options.jsonl")
+        for line in (tmp_path / "export" / "custom-field-options.jsonl")
         .read_text()
         .splitlines()
     ]
-    assert [row["project_ids"] for row in contexts] == [["2"]]
+    assert [row["project_ids"] for row in contexts] == [["1"]]  # first occurrence wins
     assert [row["source"]["id"] for row in options] == [
         "customfield_1:1",
         "customfield_1:2",
     ]
 
 
-def test_cli_reports_unauthorized_applicability_without_claiming_empty(
+def test_cli_reports_unauthorized_custom_fields_without_claiming_empty(
     tmp_path: Path, monkeypatch: MonkeyPatch, jira_basic_auth_fixture: FixtureSetup
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -168,41 +168,44 @@ def test_cli_reports_unauthorized_applicability_without_claiming_empty(
 
     jira_basic_auth_fixture("https://jira.example.com", _make_fixture_handler(handler))
 
-    assert cli.main(["export"]) == 1
-    assert not (tmp_path / "export" / "field-contexts.jsonl").exists()
+    assert cli.main(["export", "export"]) == 1
+    assert not (tmp_path / "export" / "custom-fields.jsonl").exists()
     manifest = json.loads((tmp_path / "export" / "manifest.json").read_text())
     checkpoint = json.loads((tmp_path / "export" / "checkpoint.json").read_text())
-    assert manifest["coverage"]["field_applicability"]["status"] == "unauthorized"
+    assert manifest["coverage"]["custom_fields"]["status"] == "unauthorized"
     forbidden = 403
-    assert checkpoint["stages"]["field_applicability"]["http_status"] == forbidden
+    assert checkpoint["stages"]["custom_fields"]["http_status"] == forbidden
     assert "private-password" not in "".join(
         path.read_text() for path in (tmp_path / "export").iterdir()
     )
-    assert manifest["coverage"]["field_options"] == {"status": "complete", "count": 0}
+    assert manifest["coverage"]["custom_field_options"] == {
+        "status": "complete",
+        "count": 0,
+    }
 
 
-def test_cli_reports_unsupported_options_and_empty_applicability(
+def test_cli_reports_unsupported_options_and_empty_custom_fields(
     tmp_path: Path, monkeypatch: MonkeyPatch, jira_basic_auth_fixture: FixtureSetup
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/field"):
             return httpx.Response(200, json=[{"id": "customfield_1", "custom": True}])
         if request.url.path.endswith("/customFields"):
-            return httpx.Response(200, json={"values": [], "total": 0})
+            return httpx.Response(200, json={"values": [], "screens": [], "total": 0})
         if request.url.path.endswith("/options"):
             return httpx.Response(404, json={"error": "Not found"})
         raise AssertionError(str(request.url))
 
     jira_basic_auth_fixture("https://jira.example.com", _make_fixture_handler(handler))
 
-    assert cli.main(["export"]) == 1
-    assert (tmp_path / "export" / "field-contexts.jsonl").read_text() == ""
-    assert not (tmp_path / "export" / "field-options.jsonl").exists()
+    assert cli.main(["export", "export"]) == 1
+    assert (tmp_path / "export" / "custom-fields.jsonl").read_text() == ""
+    assert not (tmp_path / "export" / "custom-field-options.jsonl").exists()
     coverage = json.loads((tmp_path / "export" / "manifest.json").read_text())[
         "coverage"
     ]
-    assert coverage["field_applicability"] == {"status": "complete", "count": 0}
-    assert coverage["field_options"]["status"] == "unsupported"
+    assert coverage["custom_fields"] == {"status": "complete", "count": 0}
+    assert coverage["custom_field_options"]["status"] == "unsupported"
     assert (
         "private-password" not in (tmp_path / "export" / "checkpoint.json").read_text()
     )
@@ -218,7 +221,7 @@ def test_cli_retries_incomplete_options_without_duplication(
         if request.url.path.endswith("/field"):
             return httpx.Response(200, json=[{"id": "customfield_1", "custom": True}])
         if request.url.path.endswith("/customFields"):
-            return httpx.Response(200, json={"values": [], "total": 0})
+            return httpx.Response(200, json={"values": [], "screens": [], "total": 0})
         if request.url.path.endswith("/options"):
             attempts += 1
             if attempts == 1:
@@ -230,11 +233,11 @@ def test_cli_retries_incomplete_options_without_duplication(
 
     jira_basic_auth_fixture("https://jira.example.com", _make_fixture_handler(handler))
 
-    args = ["export"]
+    args = ["export", "export"]
     assert cli.main(args) == 1
     assert (
         json.loads((tmp_path / "export" / "checkpoint.json").read_text())["stages"][
-            "field_options"
+            "custom_field_options"
         ]["status"]
         == "failed"
     )
@@ -242,8 +245,13 @@ def test_cli_retries_incomplete_options_without_duplication(
     expected_attempts = 2
     assert attempts == expected_attempts
     assert (
-        len((tmp_path / "export" / "field-options.jsonl").read_text().splitlines()) == 1
+        len(
+            (tmp_path / "export" / "custom-field-options.jsonl")
+            .read_text()
+            .splitlines()
+        )
+        == 1
     )
     assert json.loads((tmp_path / "export" / "checkpoint.json").read_text())["stages"][
-        "field_options"
+        "custom_field_options"
     ] == {"status": "complete", "count": 1}

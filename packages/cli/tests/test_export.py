@@ -28,11 +28,11 @@ def _make_fixture_handler(
         if request.url.path.endswith("/rest/api/2/serverInfo"):
             return httpx.Response(404)
         if request.url.path.endswith("/rest/api/2/customFields"):
-            return httpx.Response(200, json={"values": [], "total": 0})
+            return httpx.Response(200, json={"values": [], "screens": [], "total": 0})
         if "/options" in request.url.path:
             return httpx.Response(200, json={"options": [], "total": 0})
         if request.url.path.endswith("/rest/api/2/screens"):
-            return httpx.Response(200, json={"values": [], "total": 0})
+            return httpx.Response(200, json={"values": [], "screens": [], "total": 0})
         if "/rest/api/2/screens/" in request.url.path:
             return httpx.Response(200, json=[])
         return handler(request)
@@ -63,7 +63,7 @@ def test_cli_exports_only_custom_fields(
         "https://jira.example.com/jira", _make_fixture_handler(handler)
     )
 
-    assert cli.main(["export"]) == 0
+    assert cli.main(["export", "export"]) == 0
     records = [
         json.loads(line)
         for line in (tmp_path / "export" / "fields.jsonl").read_text().splitlines()
@@ -96,7 +96,7 @@ def test_cli_exports_only_custom_fields(
     assert requests[0].method == "GET"
     assert str(requests[0].url) == "https://jira.example.com/jira/rest/api/2/field"
     assert requests[0].headers["Authorization"].startswith("Basic ")
-    assert "2 fields exported" in capsys.readouterr().out
+    assert "Extracting fields... .." in capsys.readouterr().out
 
 
 def test_cli_checkpoints_completed_fields_and_skips_them_on_rerun(
@@ -112,7 +112,7 @@ def test_cli_checkpoints_completed_fields_and_skips_them_on_rerun(
 
     jira_basic_auth_fixture("https://jira.example.com", _make_fixture_handler(handler))
 
-    args = ["export"]
+    args = ["export", "export"]
     assert cli.main(args) == 0
     before = (tmp_path / "export" / "fields.jsonl").read_bytes()
     manifest = json.loads((tmp_path / "export" / "manifest.json").read_text())
@@ -165,7 +165,7 @@ def test_cli_retries_interrupted_stage_without_duplicate_records(
         original_save(path, data)
 
     monkeypatch.setattr(cli, "_save_json", crash_before_checkpoint)
-    args = ["export"]
+    args = ["export", "export"]
     assert cli.main(args) == 1
     run_id = json.loads((tmp_path / "export" / "manifest.json").read_text())["run_id"]
     assert len((tmp_path / "export" / "fields.jsonl").read_text().splitlines()) == 1
@@ -206,7 +206,7 @@ def test_cli_recovers_when_initial_checkpoint_was_not_created(
         original_save(path, data)
 
     monkeypatch.setattr(cli, "_save_json", crash_at_checkpoint)
-    args = ["export"]
+    args = ["export", "export"]
     assert cli.main(args) == 1
     run_id = json.loads((tmp_path / "export" / "manifest.json").read_text())["run_id"]
     assert cli.main(args) == 0
@@ -237,7 +237,7 @@ def test_cli_retries_failed_stage_without_persisting_secret(
 
     jira_basic_auth_fixture("https://jira.example.com", _make_fixture_handler(handler))
 
-    args = ["export"]
+    args = ["export", "export"]
     assert cli.main(args) == 1
     failed = json.loads((tmp_path / "export" / "checkpoint.json").read_text())
     assert failed["stages"]["fields"] == {
@@ -278,7 +278,7 @@ def test_cli_upserts_repeated_source_ids(
 
     jira_basic_auth_fixture("https://jira.example.com", _make_fixture_handler(handler))
 
-    assert cli.main(["export"]) == 0
+    assert cli.main(["export", "export"]) == 0
     records = [
         json.loads(line)
         for line in (tmp_path / "export" / "fields.jsonl").read_text().splitlines()
@@ -313,7 +313,7 @@ def test_cli_omits_untrusted_metadata_and_redacts_secret_like_names(
 
     jira_basic_auth_fixture("https://jira.example.com", _make_fixture_handler(handler))
 
-    assert cli.main(["export"]) == 0
+    assert cli.main(["export", "export"]) == 0
     exported = (tmp_path / "export" / "fields.jsonl").read_text()
     assert secret not in exported + str(capsys.readouterr())
     records = [json.loads(line) for line in exported.splitlines()]
@@ -336,9 +336,32 @@ def test_cli_reports_api_failure_without_config(
 
     jira_basic_auth_fixture("https://jira.example.com", _make_fixture_handler(handler))
 
-    assert cli.main(["export"]) == 1
+    assert cli.main(["export", "export"]) == 1
     output = capsys.readouterr()
     assert "403" in output.err
     assert "Jira field endpoint" in output.err
     assert "private-password" not in output.out + output.err
     assert not (tmp_path / "export" / "fields.jsonl").exists()
+
+
+def test_cli_reports_connection_failure_cause(
+    tmp_path: Path,
+    capsys: CaptureFixture[str],
+    jira_basic_auth_fixture: FixtureSetup,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        error = httpx.ConnectError("connect failed")
+        error.__cause__ = OSError("[Errno 8] no host")
+        raise error
+
+    jira_basic_auth_fixture("https://jira.example.com", handler)
+
+    assert cli.main(["export", "export"]) == 1
+
+    assert "[Errno 8] no host" in capsys.readouterr().err
+    failed = json.loads((tmp_path / "export" / "checkpoint.json").read_text())
+    assert failed["stages"]["fields"] == {
+        "status": "failed",
+        "error": "RequestError",
+        "detail": "httpx.ConnectError <- OSError: [Errno 8] no host",
+    }

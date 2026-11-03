@@ -26,11 +26,11 @@ def test_cli_reports_scriptrunner_gap_without_guessing_an_endpoint(
         if request.url.path.endswith("/field"):
             return httpx.Response(200, json=[])
         if request.url.path.endswith(("/customFields", "/screens")):
-            return httpx.Response(200, json={"values": [], "total": 0})
+            return httpx.Response(200, json={"values": [], "screens": [], "total": 0})
         raise AssertionError(f"Unexpected API request: {request.url.path}")
 
     jira_basic_auth_fixture("https://jira.example.com", respond)
-    args = ["export"]
+    args = ["export", "export"]
     assert cli.main(args) == 0
     coverage = json.loads((tmp_path / "export" / "manifest.json").read_text())[
         "coverage"

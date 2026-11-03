@@ -31,14 +31,14 @@ def test_cli_reports_elements_connect_unsupported_without_guessing_api(
                 ],
             )
         if request.url.path.endswith(("/customFields", "/screens")):
-            return httpx.Response(200, json={"values": [], "total": 0})
+            return httpx.Response(200, json={"values": [], "screens": [], "total": 0})
         if request.url.path.endswith("/customFields/10001/options"):
             return httpx.Response(200, json={"options": [], "total": 0})
         raise AssertionError(f"Unexpected API request: {request.url.path}")
 
     jira_basic_auth_fixture("https://jira.example.com", respond)
 
-    args = ["export"]
+    args = ["export", "export"]
     assert cli.main(args) == 0
     coverage = json.loads((tmp_path / "export" / "manifest.json").read_text())[
         "coverage"

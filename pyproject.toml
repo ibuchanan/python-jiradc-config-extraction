@@ -2,7 +2,7 @@
 name = "jira-dc-config-extraction"
 version = "0.1.0"
 description = "Extract and analyze Jira Data Center configuration"
-readme = "SPEC.md"
+readme = "README.md"
 requires-python = ">=3.14"
 dependencies = ["cli", "config", "jira"]
 

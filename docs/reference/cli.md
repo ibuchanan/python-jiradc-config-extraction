@@ -6,7 +6,7 @@ Console script: `jira-config-export` (entry point `cli.main:main`). Run it from 
 
 ### `doctor`
 
-```
+```text
 jira-config-export doctor
 ```
 
@@ -30,7 +30,7 @@ Exit status: `1` if any check is `fail`, otherwise `0`. Warnings alone do not fa
 
 ### `export`
 
-```
+```text
 jira-config-export export [OPTIONS] OUTPUT_DIR
 ```
 

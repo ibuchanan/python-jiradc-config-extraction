@@ -6,7 +6,6 @@ import json
 from typing import TYPE_CHECKING
 
 import httpx
-import pytest
 
 from cli import main as cli
 
@@ -49,6 +48,9 @@ def test_cli_uses_yaml_user_and_password(
     assert requests[0].headers["Authorization"].startswith("Basic ")
     assert "private-password" not in str(requests[0].url) + str(capsys.readouterr())
 
+    assert cli.main(["report[qa]"]) == 0
+    assert "report[qa]/fields.jsonl" in capsys.readouterr().out
+
 
 def test_cli_reports_missing_config_without_secret(
     tmp_path: Path, monkeypatch: MonkeyPatch, capsys: CaptureFixture[str]
@@ -64,7 +66,5 @@ def test_cli_exits_with_status_2_for_two_positional_args(
 ) -> None:
     """Test that CLI exits with status 2 when given two positional arguments."""
     monkeypatch.chdir(tmp_path)
-    with pytest.raises(SystemExit) as exc_info:
-        cli.main(["https://jira.example.com", "output"])
     exit_code_for_usage_error = 2
-    assert exc_info.value.code == exit_code_for_usage_error
+    assert cli.main(["https://jira.example.com", "output"]) == exit_code_for_usage_error

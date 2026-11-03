@@ -1,6 +1,7 @@
 """End-to-end coverage reporting at the CLI and artifact seams."""
 
 import json
+import re
 from typing import TYPE_CHECKING
 
 import httpx
@@ -45,10 +46,13 @@ def test_cli_summarizes_empty_queried_stages_and_optional_app_gaps(
     assert manifest["coverage"]["screens"] == {"status": "complete", "count": 0}
     output = capsys.readouterr().out
     assert "Extracting screens..." in output
-    assert "screens: complete (0 records, not found)" in output
-    assert "elements_connect: unsupported" in output
-    assert "dynamic_forms: unsupported" in output
-    assert "scriptrunner: unsupported" in output
+    for stage, status in (
+        ("screens", "complete (0 records, not found)"),
+        ("elements_connect", "unsupported"),
+        ("dynamic_forms", "unsupported"),
+        ("scriptrunner", "unsupported"),
+    ):
+        assert re.search(rf"(?m)^{stage}\s+{re.escape(status)}\s*$", output)
     assert (
         "private-password"
         not in output + (tmp_path / "export" / "manifest.json").read_text()
@@ -79,7 +83,7 @@ def test_field_failure_reports_not_queried_stages(
         "status": "not_queried",
         "reason": "fields incomplete",
     }
-    assert "screens: not_queried" in capsys.readouterr().out
+    assert re.search(r"(?m)^screens\s+not_queried$", capsys.readouterr().out)
     assert len(requests) == 1
 
 
@@ -105,7 +109,7 @@ def test_unsupported_queried_jira_stage_is_incomplete(
 
     jira_basic_auth_fixture("https://jira.example.com", respond)
     assert cli.main(["export"]) == 1
-    assert "field_options: unsupported" in capsys.readouterr().out
+    assert re.search(r"(?m)^field_options\s+unsupported\s*$", capsys.readouterr().out)
     assert (tmp_path / "export" / "fields.jsonl").exists()
 
 
@@ -142,7 +146,9 @@ def test_cli_fails_on_required_jira_stage_and_preserves_retryable_data(
     assert manifest["jira_version"] is None
     assert manifest["coverage"]["field_applicability"]["status"] == "unauthorized"
     assert (tmp_path / "export" / "fields.jsonl").exists()
-    assert "field_applicability: unauthorized" in capsys.readouterr().out
+    assert re.search(
+        r"(?m)^field_applicability\s+unauthorized\s*$", capsys.readouterr().out
+    )
     assert cli.main(args) == 0
     expected_attempts = 2
     assert calls == expected_attempts

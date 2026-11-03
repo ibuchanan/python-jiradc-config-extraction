@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import json
 import os
@@ -13,8 +12,16 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import typer
+from rich.console import Console
+from rich.table import Table
+
 from config import load_jira_dc_settings
 from jira import JiraClient, JiraError
+
+app = typer.Typer(help="Export Jira Data Center configuration.", add_completion=False)
+console = Console()
+error_console = Console(stderr=True)
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -207,7 +214,7 @@ async def export_configuration(  # noqa: PLR0915
                 }
                 _save_json(manifest_path, manifest)
                 continue
-            print(f"Extracting {stage}...")
+            console.print(f"[cyan]Extracting[/cyan] {stage}...")
             try:
                 records = await extract(client, output_dir)
                 _atomic_write(
@@ -316,7 +323,9 @@ def _print_summary(output_dir: Path, *, fields_failed: bool = False) -> bool:
                 stage, {"status": "not_queried", "reason": "fields incomplete"}
             )
         _save_json(manifest_path, manifest)
-    print("Coverage summary:")
+    table = Table(title="Coverage summary", box=None, pad_edge=False)
+    table.add_column("Stage", style="cyan")
+    table.add_column("Status")
     for stage, result in sorted(coverage.items()):
         status = result["status"]
         suffix = (
@@ -326,26 +335,27 @@ def _print_summary(output_dir: Path, *, fields_failed: bool = False) -> bool:
             if status == "complete"
             else ""
         )
-        print(f"  {stage}: {status}{suffix}")
+        style = (
+            "green"
+            if status == "complete"
+            else "yellow"
+            if status == "not_queried"
+            else "red"
+        )
+        table.add_row(stage, f"[{style}]{status}{suffix}[/{style}]")
+    console.print(table)
     return fields_failed or any(
         coverage[stage]["status"] != "complete" for stage in queried
     )
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run a read-only export, reporting errors without printing credentials."""
-    parser = argparse.ArgumentParser(
-        description="Export Jira Data Center custom fields"
-    )
-    parser.add_argument("output_dir", type=Path, help="Directory for export files")
-    args = parser.parse_args(argv)
-    output_dir = args.output_dir
+def _run_export(output_dir: Path) -> int:
+    """Export Jira Data Center configuration to OUTPUT_DIR."""
     try:
         settings = load_jira_dc_settings()
     except (OSError, ValueError) as exc:
-        print(
-            f"Jira configuration unavailable ({type(exc).__name__})",
-            file=sys.stderr,
+        error_console.print(
+            f"[red]Jira configuration unavailable ({type(exc).__name__})[/red]"
         )
         return 1
     auth = {"user": settings.user, "password": settings.password.get_secret_value()}
@@ -353,27 +363,49 @@ def main(argv: list[str] | None = None) -> int:
         count = asyncio.run(export_fields(settings.url, output_dir, **auth))
     except JiraError as exc:
         if exc.status_code is not None:
-            print(
-                f"Jira field endpoint failed HTTP {exc.status_code}",
-                file=sys.stderr,
+            error_console.print(
+                f"[red]Jira field endpoint failed HTTP {exc.status_code}[/red]"
             )
         else:
-            print(f"Jira field export failed ({exc.error_type})", file=sys.stderr)
+            error_console.print(
+                f"[red]Jira field export failed ({exc.error_type})[/red]"
+            )
         _print_summary(output_dir, fields_failed=True)
         return 1
     except (ValueError, OSError) as exc:
-        print(f"Jira field export failed ({type(exc).__name__})", file=sys.stderr)
+        error_console.print(
+            f"[red]Jira field export failed ({type(exc).__name__})[/red]"
+        )
         _print_summary(output_dir, fields_failed=True)
         return 1
-    print(f"{count} fields exported to {output_dir / 'fields.jsonl'}")
+    console.print(
+        f"{count} fields exported to {output_dir / 'fields.jsonl'}",
+        style="green",
+        markup=False,
+    )
     try:
         asyncio.run(export_configuration(settings.url, output_dir, **auth))
     except (JiraError, ValueError, OSError) as exc:
-        print(
-            f"Jira configuration export failed ({type(exc).__name__})", file=sys.stderr
+        error_console.print(
+            f"[red]Jira configuration export failed ({type(exc).__name__})[/red]"
         )
         return 1
     return int(_print_summary(output_dir))
+
+
+@app.command()
+def export(output_dir: Path) -> None:
+    """Export Jira Data Center configuration to OUTPUT_DIR."""
+    raise typer.Exit(_run_export(output_dir))
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the Typer command and return an exit status for the console script."""
+    try:
+        app(args=argv)
+    except SystemExit as exc:
+        return int(exc.code or 0)
+    return 0
 
 
 if __name__ == "__main__":

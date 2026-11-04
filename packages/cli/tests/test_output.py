@@ -121,6 +121,16 @@ def test_failed_preflight_stops_before_creating_output(
     tmp_path: Path, monkeypatch: MonkeyPatch, capsys: CaptureFixture[str]
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    scratch = tmp_path / ".scratch"
+    scratch.mkdir()
+    (scratch / "app-credentials.yaml").write_text(
+        "apps:\n"
+        "  - name: jira-dc\n"
+        "    url: https://jira.example.com\n"
+        "    user: admin\n"
+        "    password: private-password\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         cli,
         "run_checks",

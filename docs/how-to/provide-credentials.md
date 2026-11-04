@@ -32,6 +32,18 @@ Use this guide to give `jira-config-export` the connection details for a Jira Da
 
 All three of `url`, `user`, and `password` must be strings. Other keys, and other entries in `apps`, are ignored.
 
+## Override the URL for one run
+
+`export` takes an optional `--url`:
+
+```sh
+uv run jira-config-export export --url https://jira.example.com/jira ./export
+```
+
+When it is omitted, the `url` from the credentials file is used. When it is given, it takes precedence over that value, but it must keep the same scheme, host, and port so the credentials are not sent to a different server. A trailing slash is ignored; the path may differ. The URL is validated before the output directory is touched.
+
+Credentials always come from this file. The command has no `--user` or `--password` option, and a `--url` that embeds a user name or password is rejected.
+
 ## If you want to keep other applications in the same file
 
 Add more entries to `apps` with different names. Only the `jira-dc` entry is read.

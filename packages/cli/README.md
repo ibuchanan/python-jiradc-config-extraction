@@ -7,7 +7,10 @@ From the repository root, put a `jira-dc` entry with `url`, `user`, and `passwor
 ```sh
 uv run jira-config-export doctor          # check config, DNS, TCP, TLS, credentials
 uv run jira-config-export export ./export # run the export (add -v for debug logs)
+uv run jira-config-export export --url https://jira.example.com/jira ./export
 ```
+
+`export` uses the `url` from the credentials file unless `--url` is given. The option takes precedence, but it must keep the same scheme, host, and port as the credentials file so the credentials are never sent to a different server; a trailing slash is ignored. An invalid, unreachable, or mismatched URL fails before the output directory is touched. Credentials always come from the file: there is no `--user` or `--password` option, and a `--url` with embedded credentials is rejected.
 
 `doctor` runs these checks in order and stops at the first failure, marking later checks `skip`: `config` (credentials file loads), `url` (scheme/host/port), `dns`, `tcp` (connect), `http` (TLS and routing, via unauthenticated `GET /rest/api/2/serverInfo`), `auth` (`GET /rest/api/2/myself` with Basic auth), and `proxy`. `proxy` warns when `HTTPS_PROXY`-style variables are set, because the exporter's explicit httpx transport ignores them (curl would not). Output never includes the password or response bodies. `doctor` exits nonzero if any check fails; warnings alone do not.
 

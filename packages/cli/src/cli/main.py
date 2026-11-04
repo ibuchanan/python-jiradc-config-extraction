@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import typer
@@ -38,6 +39,8 @@ from jira import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
+
+    from config import JiraDCSettings
 
     type ExtractFunc = Callable[[JiraClient, Path, int], AsyncIterator[Batch]]
 
@@ -520,9 +523,51 @@ def _describe_state(output_dir: Path) -> list[str]:
     return lines
 
 
-def _preflight() -> bool:
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _normalised_url(url: str) -> str:
+    """Validate a Jira base URL and return it without a trailing slash."""
+    candidate = url.strip().rstrip("/")
+    parts = urlsplit(candidate)
+    if parts.scheme not in _DEFAULT_PORTS or not parts.hostname:
+        raise ValueError("url must look like https://host[:port][/context]")
+    if parts.username is not None or parts.password is not None:
+        raise ValueError("url must not include a user name or password")
+    if parts.query or parts.fragment:
+        raise ValueError("url must not include a query or fragment")
+    try:
+        _ = parts.port
+    except ValueError as exc:
+        raise ValueError("url has an invalid port") from exc
+    return candidate
+
+
+def _origin(url: str) -> tuple[str, str, int]:
+    """Return the scheme, host, and effective port that identify a Jira instance."""
+    parts = urlsplit(url)
+    return (
+        parts.scheme,
+        parts.hostname or "",
+        parts.port or _DEFAULT_PORTS[parts.scheme],
+    )
+
+
+def _apply_url(settings: JiraDCSettings, url: str) -> JiraDCSettings:
+    """Use a validated command-line URL, but never send credentials to another host."""
+    candidate = _normalised_url(url)
+    configured = _normalised_url(settings.url)
+    if _origin(candidate) != _origin(configured):
+        raise ValueError(
+            f"url {candidate} does not match the credentials file url {configured}: "
+            "scheme, host, and port must be the same"
+        )
+    return settings.model_copy(update={"url": candidate})
+
+
+def _preflight(settings: JiraDCSettings) -> bool:
     """Confirm config and credentials work before touching the output directory."""
-    results = {result.name: result for result in run_checks(load_jira_dc_settings)}
+    results = {result.name: result for result in run_checks(lambda: settings)}
     failed = next((r for r in results.values() if r.status == "fail"), None)
     if failed is not None:
         if failed.name == "config":
@@ -811,22 +856,39 @@ def _print_summary(output_dir: Path, *, fields_failed: bool = False) -> bool:
     )
 
 
-def _run_export(output_dir: Path) -> int:
-    """Export Jira Data Center configuration to OUTPUT_DIR."""
-    if not _preflight():
-        return 1
-    console.print(
-        f"Output directory: {output_dir.resolve()}", markup=False, soft_wrap=True
-    )
-    for line in _describe_state(output_dir):
-        console.print(line, markup=False, soft_wrap=True)
+def _load_settings(url: str | None) -> JiraDCSettings | None:
+    """Load credentials and apply an optional, validated command-line URL."""
     try:
         settings = load_jira_dc_settings()
     except (OSError, ValueError) as exc:
         error_console.print(
             f"[red]Jira configuration unavailable ({_error_text(exc)})[/red]"
         )
+        error_console.print(
+            "Run [bold]jira-config-export doctor[/bold] for the full report."
+        )
+        return None
+    if url is None:
+        return settings
+    try:
+        return _apply_url(settings, url)
+    except ValueError as exc:
+        error_console.print(f"[red]{escape(str(exc))}[/red]")
+        return None
+
+
+def _run_export(output_dir: Path, *, url: str | None = None) -> int:
+    """Export Jira Data Center configuration to OUTPUT_DIR."""
+    settings = _load_settings(url)
+    if settings is None:
         return 1
+    if not _preflight(settings):
+        return 1
+    console.print(
+        f"Output directory: {output_dir.resolve()}", markup=False, soft_wrap=True
+    )
+    for line in _describe_state(output_dir):
+        console.print(line, markup=False, soft_wrap=True)
     auth = {"user": settings.user, "password": settings.password.get_secret_value()}
     try:
         asyncio.run(export_fields(settings.url, output_dir, **auth))
@@ -858,13 +920,24 @@ def _run_export(output_dir: Path) -> int:
 @app.command()
 def export(
     output_dir: Path,
+    url: Annotated[
+        str | None,
+        typer.Option(
+            "--url",
+            help=(
+                "Jira base URL. Overrides the url in the credentials file, whose "
+                "scheme, host, and port it must match. Credentials always come "
+                "from the credentials file."
+            ),
+        ),
+    ] = None,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Log debug details to stderr.")
     ] = False,  # noqa: FBT002
 ) -> None:
     """Export Jira Data Center configuration to OUTPUT_DIR."""
     _configure_logging(verbose=verbose)
-    raise typer.Exit(_run_export(output_dir))
+    raise typer.Exit(_run_export(output_dir, url=url))
 
 
 _DOCTOR_STYLES = {"pass": "green", "warn": "yellow", "fail": "red", "skip": "dim"}

@@ -39,10 +39,19 @@ Exports configuration to `OUTPUT_DIR`. Requests are read-only (`GET`).
 | Argument or option | Description |
 | --- | --- |
 | `OUTPUT_DIR` | Required. Directory for output files. Rerunning with the same directory resumes. |
+| `--url URL` | Jira base URL. Defaults to the `url` in the credentials file. A trailing slash is ignored. The URL must use the same scheme, host, and port as the credentials file; only the path may differ, and the option wins when it does. |
 | `-v`, `--verbose` | Log debug details to stderr. Default off. |
+
+Credentials always come from the credentials file. There is no `--user` or `--password` option, and a `--url` containing a user name or password is rejected. Run the command with `--url` to start an export against the URL you name, or omit it to use the configured URL:
+
+```sh
+jira-config-export export ./export
+jira-config-export export --url https://jira.example.com/jira ./export
+```
 
 Behaviour:
 
+- The effective URL is validated before `OUTPUT_DIR` is touched. An invalid URL, a URL whose scheme, host, or port differs from the credentials file (so credentials are never sent to an unexpected server), or a preflight failure for an unreachable host stops the run with a clear error.
 - A preflight runs the `doctor` checks for config, network, and credentials. On failure the run stops before `OUTPUT_DIR` is touched.
 - Output shows the absolute output directory, the run state (fresh or resuming), and one dot per record written per stage.
 - Requests are paced at `REQUESTS_PER_MINUTE`, set to 120 near the top of `packages/cli/src/cli/main.py`.

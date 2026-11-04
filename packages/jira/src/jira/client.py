@@ -278,7 +278,7 @@ class JiraClient:
         return extraction.screen_tabs(self, screen_ids, start_at)
 
     def screen_tab_fields(
-        self, tabs: list[tuple[str, str]], start_at: int = 0
+        self, tabs: list[extraction.ScreenTab], start_at: int = 0
     ) -> AsyncIterator[extraction.Batch]:
         """Yield the fields on each tab; ``start_at`` is a tab index."""
         return extraction.screen_tab_fields(self, tabs, start_at)
@@ -296,13 +296,13 @@ class JiraClient:
         return extraction.issue_type_schemes(self, start_at)
 
     def project_issue_type_view_screens(
-        self, targets: list[tuple[str, str, str]], start_at: int = 0
+        self, targets: list[extraction.IssueTypeScreenTarget], start_at: int = 0
     ) -> AsyncIterator[extraction.Batch]:
         """Yield each project issue type's view screen; ``start_at`` is an index."""
         return extraction.project_issue_type_view_screens(self, targets, start_at)
 
     def project_workflow_schemes(
-        self, projects: list[tuple[str, str]], start_at: int = 0
+        self, projects: list[extraction.ProjectRef], start_at: int = 0
     ) -> AsyncIterator[extraction.Batch]:
         """Yield each project's workflow scheme; ``start_at`` is a project index."""
         return extraction.project_workflow_schemes(self, projects, start_at)

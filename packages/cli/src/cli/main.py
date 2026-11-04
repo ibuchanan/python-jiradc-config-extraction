@@ -9,6 +9,7 @@ import math
 import os
 import sys
 import tempfile
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
@@ -23,12 +24,21 @@ from rich.table import Table
 from cli.doctor import run_checks
 from cli.stage_file import StageFile
 from config import load_jira_dc_settings
-from jira import JiraClient, JiraError, describe_exception
+from jira import (
+    IssueTypeScreenTarget,
+    JiraClient,
+    JiraError,
+    ProjectRef,
+    ScreenTab,
+    describe_exception,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
     from jira import Batch
+
+    type ExtractFunc = Callable[[JiraClient, Path, int], AsyncIterator[Batch]]
 
 app = typer.Typer(help="Export Jira Data Center configuration.", add_completion=False)
 console = Console()
@@ -98,37 +108,25 @@ def _configure_logging(*, verbose: bool) -> None:
 # requests are spaced evenly (120 means one request every half second).
 REQUESTS_PER_MINUTE = 120
 
-_STAGE_ORDER = (
-    "fields",
-    "custom_fields",
-    "custom_field_options",
-    "projects",
-    "issue_types",
-    "issue_type_schemes",
-    "project_workflow_schemes",
-    "project_issue_type_view_screens",
-    "screens",
-    "screen_tabs",
-    "screen_tab_fields",
-)
 
+@dataclass(frozen=True)
+class Stage:
+    """One export stage: its output file, prerequisites, and extractor.
 
-_PREREQUISITES = {
-    "project_workflow_schemes": ("projects",),
-    "project_issue_type_view_screens": ("projects", "issue_type_schemes"),
-    "screen_tabs": ("screens",),
-    "screen_tab_fields": ("screen_tabs",),
-}
+    The order of ``STAGES`` is the run order. The output file, prerequisites,
+    internal-API marker, resume state, execution, and coverage all derive from
+    this single declaration.
 
-# Stages read from Jira's undocumented project-settings API; flagged in results.
-_INTERNAL_API_STAGES = frozenset({"project_issue_type_view_screens"})
+    ``extract`` is ``None`` for the fields stage, which replaces one whole file
+    atomically instead of committing resumable batches; every other stage yields
+    ``Batch`` records for ``StageFile`` to append and checkpoint.
+    """
 
-
-def _tag_api(stage: str, result: dict[str, Any]) -> dict[str, Any]:
-    """Mark results that came from an internal, undocumented API."""
-    if stage in _INTERNAL_API_STAGES:
-        result["api"] = "internal"
-    return result
+    name: str
+    filename: str
+    extract: ExtractFunc | None = None
+    prerequisites: tuple[str, ...] = ()
+    internal_api: bool = False
 
 
 def _announce_wait(seconds: float) -> None:
@@ -158,6 +156,175 @@ def _print_dots(count: int) -> None:
     console.print("." * count, end="", markup=False, highlight=False, soft_wrap=True)
 
 
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Read a stage file into records, in file order."""
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _source_ids(path: Path) -> list[str]:
+    """Read every record's ``source.id`` from a stage file, in file order."""
+    return [str(record["source"]["id"]) for record in _read_jsonl(path)]
+
+
+def _field_ids(output_dir: Path) -> list[str]:
+    """Read the custom field IDs written by the fields stage."""
+    return _source_ids(output_dir / "fields.jsonl")
+
+
+def _screen_ids(output_dir: Path) -> list[str]:
+    """Read the screen IDs written by the screens stage."""
+    return _source_ids(output_dir / "screens.jsonl")
+
+
+def _tabs(output_dir: Path) -> list[ScreenTab]:
+    """Read the screen and tab IDs written by the tabs stage."""
+    return [
+        ScreenTab(record["screen_id"], record["source"]["id"].split(":", 1)[1])
+        for record in _read_jsonl(output_dir / "screen-tabs.jsonl")
+    ]
+
+
+def _custom_fields(
+    client: JiraClient, output_dir: Path, start: int
+) -> AsyncIterator[Batch]:
+    return client.custom_fields(sorted(_field_ids(output_dir)), start)
+
+
+def _custom_field_options(
+    client: JiraClient, output_dir: Path, start: int
+) -> AsyncIterator[Batch]:
+    return client.custom_field_options(_field_ids(output_dir), start)
+
+
+def _projects(
+    client: JiraClient, _output_dir: Path, start: int
+) -> AsyncIterator[Batch]:
+    return client.projects(start)
+
+
+def _issue_types(
+    client: JiraClient, _output_dir: Path, start: int
+) -> AsyncIterator[Batch]:
+    return client.issue_types(start)
+
+
+def _issue_type_schemes(
+    client: JiraClient, _output_dir: Path, start: int
+) -> AsyncIterator[Batch]:
+    return client.issue_type_schemes(start)
+
+
+def _project_workflow_schemes(
+    client: JiraClient, output_dir: Path, start: int
+) -> AsyncIterator[Batch]:
+    projects = [
+        ProjectRef(record["source"]["id"], record["project"]["key"])
+        for record in _read_jsonl(output_dir / "projects.jsonl")
+    ]
+    return client.project_workflow_schemes(projects, start)
+
+
+def _issue_type_screen_targets(output_dir: Path) -> list[IssueTypeScreenTarget]:
+    """Pair each project with the issue types its issue type scheme offers."""
+    issue_types_by_project: dict[str, set[str]] = {}
+    for record in _read_jsonl(output_dir / "issue-type-schemes.jsonl"):
+        scheme = record["issue_type_scheme"]
+        for project_id in scheme["project_ids"]:
+            issue_types_by_project.setdefault(project_id, set()).update(
+                scheme["issue_type_ids"]
+            )
+    targets: list[IssueTypeScreenTarget] = []
+    for record in _read_jsonl(output_dir / "projects.jsonl"):
+        project = ProjectRef(record["source"]["id"], record["project"]["key"])
+        if project.project_id not in issue_types_by_project:
+            message = "Project is not in any issue type scheme"
+            raise JiraError(
+                message, error_type="ValueError", stage_status="failed", detail=message
+            )
+        targets.extend(
+            IssueTypeScreenTarget(project, issue_type_id)
+            for issue_type_id in sorted(
+                issue_types_by_project[project.project_id], key=lambda i: (len(i), i)
+            )
+        )
+    return targets
+
+
+def _project_issue_type_view_screens(
+    client: JiraClient, output_dir: Path, start: int
+) -> AsyncIterator[Batch]:
+    return client.project_issue_type_view_screens(
+        _issue_type_screen_targets(output_dir), start
+    )
+
+
+def _screens(client: JiraClient, _output_dir: Path, start: int) -> AsyncIterator[Batch]:
+    return client.screens(start)
+
+
+def _screen_tabs(
+    client: JiraClient, output_dir: Path, start: int
+) -> AsyncIterator[Batch]:
+    return client.screen_tabs(_screen_ids(output_dir), start)
+
+
+def _screen_tab_fields(
+    client: JiraClient, output_dir: Path, start: int
+) -> AsyncIterator[Batch]:
+    return client.screen_tab_fields(_tabs(output_dir), start)
+
+
+STAGES: tuple[Stage, ...] = (
+    Stage("fields", "fields.jsonl"),
+    Stage("custom_fields", "custom-fields.jsonl", _custom_fields),
+    Stage("custom_field_options", "custom-field-options.jsonl", _custom_field_options),
+    Stage("projects", "projects.jsonl", _projects),
+    Stage("issue_types", "issue-types.jsonl", _issue_types),
+    Stage("issue_type_schemes", "issue-type-schemes.jsonl", _issue_type_schemes),
+    Stage(
+        "project_workflow_schemes",
+        "project-workflow-schemes.jsonl",
+        _project_workflow_schemes,
+        prerequisites=("projects",),
+    ),
+    Stage(
+        "project_issue_type_view_screens",
+        "project-issue-type-view-screens.jsonl",
+        _project_issue_type_view_screens,
+        prerequisites=("projects", "issue_type_schemes"),
+        internal_api=True,
+    ),
+    Stage("screens", "screens.jsonl", _screens),
+    Stage("screen_tabs", "screen-tabs.jsonl", _screen_tabs, prerequisites=("screens",)),
+    Stage(
+        "screen_tab_fields",
+        "screen-tab-fields.jsonl",
+        _screen_tab_fields,
+        prerequisites=("screen_tabs",),
+    ),
+)
+# Stage names in run order, and the stages that commit resumable batches.
+STAGE_ORDER = tuple(stage.name for stage in STAGES)
+_RESUMABLE_STAGES = tuple(stage for stage in STAGES if stage.extract is not None)
+_STAGES_BY_NAME = {stage.name: stage for stage in STAGES}
+
+# Sources with no supported read-only route: declared gaps, not queried stages.
+_DECLARED_GAPS = {
+    "elements_connect": (
+        "no supported read-only Elements Connect DC config API identified"
+    ),
+    "dynamic_forms": "no supported read-only Dynamic Forms DC REST API identified",
+    "scriptrunner": "no supported read-only ScriptRunner DC REST API identified",
+}
+
+
+def _tag_api(stage: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Mark results that came from an internal, undocumented API."""
+    if _STAGES_BY_NAME[stage].internal_api:
+        result["api"] = "internal"
+    return result
+
+
 def _describe_state(output_dir: Path) -> list[str]:
     """Summarize whether this run starts fresh or resumes earlier output."""
     manifest_path = output_dir / "manifest.json"
@@ -172,19 +339,17 @@ def _describe_state(output_dir: Path) -> list[str]:
         run_id = str(manifest["run_id"])[:8]
         started = manifest["created_at"]
         complete = [
-            n for n in _STAGE_ORDER if stages.get(n, {}).get("status") == "complete"
+            n for n in STAGE_ORDER if stages.get(n, {}).get("status") == "complete"
         ]
-        failed = [
-            n for n in _STAGE_ORDER if stages.get(n, {}).get("status") == "failed"
-        ]
+        failed = [n for n in STAGE_ORDER if stages.get(n, {}).get("status") == "failed"]
         partial = {
-            n: progress[n] for n in _STAGE_ORDER if isinstance(progress.get(n), dict)
+            n: progress[n] for n in STAGE_ORDER if isinstance(progress.get(n), dict)
         }
     except OSError, ValueError, KeyError, TypeError, AttributeError:
         return [
             "Found existing output that could not be read; the export will report why."
         ]
-    if len(complete) == len(_STAGE_ORDER):
+    if len(complete) == len(STAGE_ORDER):
         return [
             f"Resuming run {run_id} (started {started}): every stage is already "
             "complete, so nothing will be fetched. "
@@ -200,7 +365,7 @@ def _describe_state(output_dir: Path) -> list[str]:
         )
     if failed:
         lines.append(f"  failed:   {', '.join(failed)} (will be retried)")
-    remaining = [n for n in _STAGE_ORDER if n not in complete]
+    remaining = [n for n in STAGE_ORDER if n not in complete]
     lines.append(f"  to do:    {', '.join(remaining)}")
     return lines
 
@@ -242,6 +407,7 @@ async def export_fields(
     base_url: str, output_dir: Path, *, user: str, password: str
 ) -> int:
     """Resume a completed field stage or retry it from the beginning."""
+    stage = _STAGES_BY_NAME["fields"]
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "manifest.json"
     checkpoint_path = output_dir / "checkpoint.json"
@@ -276,20 +442,20 @@ async def export_fields(
     coverage = manifest["coverage"]
     assert isinstance(stages, dict)
     assert isinstance(coverage, dict)
-    previous = stages.get("fields")
+    previous = stages.get(stage.name)
     if (
         isinstance(previous, dict)
         and previous.get("status") == "complete"
-        and (output_dir / "fields.jsonl").exists()
+        and (output_dir / stage.filename).exists()
     ):
-        coverage["fields"] = previous
+        coverage[stage.name] = previous
         _save_json(manifest_path, manifest)
         console.print(
-            "[dim]Skipping fields: already complete "
+            f"[dim]Skipping {stage.name}: already complete "
             f"({previous['count']} records)[/dim]"
         )
         return previous["count"]
-    console.print("[cyan]Extracting[/cyan] fields... ", end="")
+    console.print(f"[cyan]Extracting[/cyan] {stage.name}... ", end="")
     try:
         count = await _extract_fields(
             base_url, output_dir, user=user, password=password
@@ -297,17 +463,17 @@ async def export_fields(
     except (JiraError, ValueError, OSError) as exc:
         console.print()
         failure = _failure_result(exc, status="failed")
-        stages["fields"] = failure
+        stages[stage.name] = failure
         _save_json(checkpoint_path, checkpoint)
-        coverage["fields"] = failure
+        coverage[stage.name] = failure
         _save_json(manifest_path, manifest)
         raise
     _print_dots(count)
     console.print()
     complete = {"status": "complete", "count": count}
-    stages["fields"] = complete
+    stages[stage.name] = complete
     _save_json(checkpoint_path, checkpoint)
-    coverage["fields"] = complete
+    coverage[stage.name] = complete
     _save_json(manifest_path, manifest)
     return count
 
@@ -315,12 +481,12 @@ async def export_fields(
 async def _extract_fields(
     base_url: str, output_dir: Path, *, user: str, password: str
 ) -> int:
-    """Read the field inventory and replace fields.jsonl atomically."""
+    """Read the field inventory and replace the fields file atomically."""
     async with _new_client(base_url, user=user, password=password) as client:
         records = await client.field_inventory()
     output_dir.mkdir(parents=True, exist_ok=True)
     _atomic_write(
-        output_dir / "fields.jsonl",
+        output_dir / _STAGES_BY_NAME["fields"].filename,
         "".join(
             json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
             for record in records
@@ -329,28 +495,100 @@ async def _extract_fields(
     return len(records)
 
 
-async def export_configuration(  # noqa: PLR0915
+async def _export_stage(
+    client: JiraClient,
+    stage: Stage,
+    output_dir: Path,
+    manifest: dict[str, Any],
+    checkpoint: dict[str, Any],
+) -> None:
+    """Run one resumable stage, recording coverage, progress, and failures."""
+    extract = stage.extract
+    if extract is None:
+        return
+    manifest_path = output_dir / "manifest.json"
+    checkpoint_path = output_dir / "checkpoint.json"
+    stages = checkpoint["stages"]
+    coverage = manifest["coverage"]
+    previous = stages.get(stage.name)
+    if (
+        isinstance(previous, dict)
+        and previous.get("status") == "complete"
+        and (output_dir / stage.filename).exists()
+    ):
+        coverage[stage.name] = previous
+        _save_json(manifest_path, manifest)
+        console.print(
+            f"[dim]Skipping {stage.name}: already complete "
+            f"({previous.get('count')} records)[/dim]"
+        )
+        return
+    blocker = next(
+        (
+            name
+            for name in stage.prerequisites
+            if stages.get(name, {}).get("status") != "complete"
+        ),
+        None,
+    )
+    if blocker is not None:
+        coverage[stage.name] = {
+            "status": "not_queried",
+            "reason": f"{blocker} incomplete",
+        }
+        _save_json(manifest_path, manifest)
+        return
+    console.print(f"[cyan]Extracting[/cyan] {stage.name}... ", end="")
+    progress = checkpoint.get("progress")
+    if not isinstance(progress, dict):
+        progress = checkpoint["progress"] = {}
+    stage_file: StageFile | None = None
+    try:
+        stage_file = StageFile(output_dir / stage.filename, progress.get(stage.name))
+        if stage_file.count:
+            console.print(
+                f"({stage_file.count} already written) ", end="", markup=False
+            )
+        with stage_file:
+            async for batch in extract(client, output_dir, stage_file.cursor):
+                _print_dots(stage_file.append(batch.records))
+                progress[stage.name] = {
+                    "cursor": batch.cursor,
+                    "offset": stage_file.offset,
+                    "count": stage_file.count,
+                }
+                _save_json(checkpoint_path, checkpoint)
+            stage_file.ensure_exists()
+    except (JiraError, ValueError, OSError) as exc:
+        console.print()
+        result = _tag_api(stage.name, _failure_result(exc))
+        if stage_file is not None and stage_file.count:
+            result["records_written"] = stage_file.count
+        stages[stage.name] = result
+        coverage[stage.name] = result
+        _save_json(checkpoint_path, checkpoint)
+        _save_json(manifest_path, manifest)
+        return
+    console.print()
+    result = _tag_api(stage.name, {"status": "complete", "count": stage_file.count})
+    stages[stage.name] = result
+    progress.pop(stage.name, None)
+    _save_json(checkpoint_path, checkpoint)
+    coverage[stage.name] = result
+    _save_json(manifest_path, manifest)
+
+
+async def export_configuration(
     base_url: str, output_dir: Path, *, user: str, password: str
 ) -> None:
-    """Export custom fields and options; report unsupported capabilities."""
+    """Export configuration stages and report unsupported app capabilities."""
     manifest_path = output_dir / "manifest.json"
     checkpoint_path = output_dir / "checkpoint.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    stages = checkpoint["stages"]
     coverage = manifest["coverage"]
-    coverage["elements_connect"] = {
-        "status": "unsupported",
-        "reason": "no supported read-only Elements Connect DC config API identified",
-    }
-    coverage["dynamic_forms"] = {
-        "status": "unsupported",
-        "reason": "no supported read-only Dynamic Forms DC REST API identified",
-    }
-    coverage["scriptrunner"] = {
-        "status": "unsupported",
-        "reason": "no supported read-only ScriptRunner DC REST API identified",
-    }
+    for name, reason in _DECLARED_GAPS.items():
+        coverage[name] = {"status": "unsupported", "reason": reason}
     _save_json(manifest_path, manifest)
     async with _new_client(base_url, user=user, password=password) as client:
         if manifest.get("jira_version") is None:
@@ -361,209 +599,8 @@ async def export_configuration(  # noqa: PLR0915
                     _save_json(manifest_path, manifest)
             except JiraError, ValueError:
                 pass  # Version is optional; do not expose server response content.
-        for stage, filename, extract in (
-            ("custom_fields", "custom-fields.jsonl", _custom_fields),
-            (
-                "custom_field_options",
-                "custom-field-options.jsonl",
-                _custom_field_options,
-            ),
-            ("projects", "projects.jsonl", _projects),
-            ("issue_types", "issue-types.jsonl", _issue_types),
-            ("issue_type_schemes", "issue-type-schemes.jsonl", _issue_type_schemes),
-            (
-                "project_workflow_schemes",
-                "project-workflow-schemes.jsonl",
-                _project_workflow_schemes,
-            ),
-            (
-                "project_issue_type_view_screens",
-                "project-issue-type-view-screens.jsonl",
-                _project_issue_type_view_screens,
-            ),
-            ("screens", "screens.jsonl", _screens),
-            ("screen_tabs", "screen-tabs.jsonl", _screen_tabs),
-            ("screen_tab_fields", "screen-tab-fields.jsonl", _screen_tab_fields),
-        ):
-            previous = stages.get(stage)
-            if (
-                isinstance(previous, dict)
-                and previous.get("status") == "complete"
-                and (output_dir / filename).exists()
-            ):
-                coverage[stage] = previous
-                _save_json(manifest_path, manifest)
-                console.print(
-                    f"[dim]Skipping {stage}: already complete "
-                    f"({previous.get('count')} records)[/dim]"
-                )
-                continue
-            blocker = next(
-                (
-                    name
-                    for name in _PREREQUISITES.get(stage, ())
-                    if stages.get(name, {}).get("status") != "complete"
-                ),
-                None,
-            )
-            if blocker is not None:
-                coverage[stage] = {
-                    "status": "not_queried",
-                    "reason": f"{blocker} incomplete",
-                }
-                _save_json(manifest_path, manifest)
-                continue
-            console.print(f"[cyan]Extracting[/cyan] {stage}... ", end="")
-            progress = checkpoint.get("progress")
-            if not isinstance(progress, dict):
-                progress = checkpoint["progress"] = {}
-            stage_file: StageFile | None = None
-            try:
-                stage_file = StageFile(output_dir / filename, progress.get(stage))
-                if stage_file.count:
-                    console.print(
-                        f"({stage_file.count} already written) ", end="", markup=False
-                    )
-                with stage_file:
-                    async for batch in extract(client, output_dir, stage_file.cursor):
-                        _print_dots(stage_file.append(batch.records))
-                        progress[stage] = {
-                            "cursor": batch.cursor,
-                            "offset": stage_file.offset,
-                            "count": stage_file.count,
-                        }
-                        _save_json(checkpoint_path, checkpoint)
-                    stage_file.ensure_exists()
-            except (JiraError, ValueError, OSError) as exc:
-                console.print()
-                result = _tag_api(stage, _failure_result(exc))
-                if stage_file is not None and stage_file.count:
-                    result["records_written"] = stage_file.count
-                stages[stage] = result
-                coverage[stage] = result
-                _save_json(checkpoint_path, checkpoint)
-                _save_json(manifest_path, manifest)
-                continue
-            console.print()
-            result = _tag_api(stage, {"status": "complete", "count": stage_file.count})
-            stages[stage] = result
-            progress.pop(stage, None)
-            _save_json(checkpoint_path, checkpoint)
-            coverage[stage] = result
-            _save_json(manifest_path, manifest)
-
-
-def _field_ids(output_dir: Path) -> list[str]:
-    return _screen_ids(output_dir, "fields.jsonl")
-
-
-def _custom_fields(
-    client: JiraClient, output_dir: Path, start: int
-) -> AsyncIterator[Batch]:
-    return client.custom_fields(sorted(_field_ids(output_dir)), start)
-
-
-def _custom_field_options(
-    client: JiraClient, output_dir: Path, start: int
-) -> AsyncIterator[Batch]:
-    return client.custom_field_options(_field_ids(output_dir), start)
-
-
-def _projects(
-    client: JiraClient, _output_dir: Path, start: int
-) -> AsyncIterator[Batch]:
-    return client.projects(start)
-
-
-def _issue_types(
-    client: JiraClient, _output_dir: Path, start: int
-) -> AsyncIterator[Batch]:
-    return client.issue_types(start)
-
-
-def _issue_type_schemes(
-    client: JiraClient, _output_dir: Path, start: int
-) -> AsyncIterator[Batch]:
-    return client.issue_type_schemes(start)
-
-
-def _project_workflow_schemes(
-    client: JiraClient, output_dir: Path, start: int
-) -> AsyncIterator[Batch]:
-    records = (
-        json.loads(line)
-        for line in (output_dir / "projects.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    )
-    return client.project_workflow_schemes(
-        [(record["source"]["id"], record["project"]["key"]) for record in records],
-        start,
-    )
-
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-
-
-def _project_issue_type_view_screens(
-    client: JiraClient, output_dir: Path, start: int
-) -> AsyncIterator[Batch]:
-    """Pair each project with the issue types its issue type scheme offers."""
-    issue_types_by_project: dict[str, set[str]] = {}
-    for record in _read_jsonl(output_dir / "issue-type-schemes.jsonl"):
-        scheme = record["issue_type_scheme"]
-        for project_id in scheme["project_ids"]:
-            issue_types_by_project.setdefault(project_id, set()).update(
-                scheme["issue_type_ids"]
-            )
-    targets: list[tuple[str, str, str]] = []
-    for record in _read_jsonl(output_dir / "projects.jsonl"):
-        project_id = record["source"]["id"]
-        if project_id not in issue_types_by_project:
-            message = "Project is not in any issue type scheme"
-            raise JiraError(
-                message, error_type="ValueError", stage_status="failed", detail=message
-            )
-        targets.extend(
-            (project_id, record["project"]["key"], issue_type_id)
-            for issue_type_id in sorted(
-                issue_types_by_project[project_id], key=lambda i: (len(i), i)
-            )
-        )
-    return client.project_issue_type_view_screens(targets, start)
-
-
-def _screen_ids(output_dir: Path, filename: str) -> list[str]:
-    return [
-        json.loads(line)["source"]["id"]
-        for line in (output_dir / filename).read_text(encoding="utf-8").splitlines()
-    ]
-
-
-def _screens(client: JiraClient, _output_dir: Path, start: int) -> AsyncIterator[Batch]:
-    return client.screens(start)
-
-
-def _screen_tabs(
-    client: JiraClient, output_dir: Path, start: int
-) -> AsyncIterator[Batch]:
-    return client.screen_tabs(_screen_ids(output_dir, "screens.jsonl"), start)
-
-
-def _screen_tab_fields(
-    client: JiraClient, output_dir: Path, start: int
-) -> AsyncIterator[Batch]:
-    tabs = [
-        (tab["screen_id"], tab["source"]["id"].split(":", 1)[1])
-        for tab in (
-            json.loads(line)
-            for line in (output_dir / "screen-tabs.jsonl")
-            .read_text(encoding="utf-8")
-            .splitlines()
-        )
-    ]
-    return client.screen_tab_fields(tabs, start)
+        for stage in _RESUMABLE_STAGES:
+            await _export_stage(client, stage, output_dir, manifest, checkpoint)
 
 
 def _print_summary(output_dir: Path, *, fields_failed: bool = False) -> bool:
@@ -572,18 +609,7 @@ def _print_summary(output_dir: Path, *, fields_failed: bool = False) -> bool:
         return True
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     coverage = manifest["coverage"]
-    queried = (
-        "custom_fields",
-        "custom_field_options",
-        "projects",
-        "issue_types",
-        "issue_type_schemes",
-        "project_workflow_schemes",
-        "project_issue_type_view_screens",
-        "screens",
-        "screen_tabs",
-        "screen_tab_fields",
-    )
+    queried = tuple(stage.name for stage in _RESUMABLE_STAGES)
     if fields_failed:
         for stage in queried:
             coverage.setdefault(

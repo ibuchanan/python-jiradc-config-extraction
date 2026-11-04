@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -12,7 +13,7 @@ import httpx
 from .errors import JiraError, describe_exception
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator
     from typing import Any
 
     from .client import JiraClient
@@ -36,6 +37,30 @@ class Batch:
 
     records: list[dict[str, object]]
     cursor: int
+
+
+@dataclass(frozen=True)
+class ProjectRef:
+    """A project's source ID and key, as used by project-scoped stages."""
+
+    project_id: str
+    key: str
+
+
+@dataclass(frozen=True)
+class ScreenTab:
+    """A tab within a screen: one unit of work for tab-field extraction."""
+
+    screen_id: str
+    tab_id: str
+
+
+@dataclass(frozen=True)
+class IssueTypeScreenTarget:
+    """A project and one of its issue types, whose view screen is extracted."""
+
+    project: ProjectRef
+    issue_type_id: str
 
 
 def _record(
@@ -103,6 +128,49 @@ def _map_http_error(exc: httpx.HTTPStatusError) -> JiraError:
     )
 
 
+@asynccontextmanager
+async def _jira_errors() -> AsyncGenerator[None]:
+    """Map transport, HTTP, and response-validation failures to safe JiraErrors.
+
+    Every extraction function wraps its Jira access in this context manager so
+    the error policy lives in one place. Validation code raises ``ValueError``
+    with a static message; that becomes a failed stage without exposing the
+    response body.
+    """
+    try:
+        yield
+    except httpx.HTTPStatusError as exc:
+        raise _map_http_error(exc) from exc
+    except httpx.RequestError as exc:
+        raise _map_request_error(exc) from exc
+    except ValueError as exc:
+        raise _invalid_response(str(exc), exc) from exc
+
+
+def _require_dict(value: object, message: str) -> dict[str, Any]:
+    """Return a Jira object response or fail with a safe validation message."""
+    if not isinstance(value, dict):
+        raise ValueError(message)
+    return value
+
+
+def _require_list(value: object, message: str) -> list[Any]:
+    """Return a Jira list response or fail with a safe validation message."""
+    if not isinstance(value, list):
+        raise ValueError(message)
+    return value
+
+
+def _paged(payload: object, key: str, message: str) -> tuple[list[Any], int]:
+    """Return the items and total of a paged Jira response."""
+    page = _require_dict(payload, message)
+    items = _require_list(page.get(key), message)
+    total = page.get("total")
+    if not isinstance(total, int):
+        raise ValueError(message)
+    return items, total
+
+
 async def field_inventory(client: JiraClient) -> list[dict[str, object]]:
     """Extract custom field inventory.
 
@@ -110,69 +178,61 @@ async def field_inventory(client: JiraClient) -> list[dict[str, object]]:
     Raises JiraError on validation or HTTP errors.
     """
     endpoint = "/rest/api/2/field"
-    try:
+    async with _jira_errors():
         response = await client.call("getFields")
-        fields = response.json()
-    except httpx.HTTPStatusError as exc:
-        raise _map_http_error(exc) from exc
-    except httpx.RequestError as exc:
-        raise _map_request_error(exc) from exc
+        fields = _require_list(response.json(), "Jira field inventory was not a list")
 
-    if not isinstance(fields, list):
-        raise _invalid_response("Jira field inventory was not a list")
+        custom_field_defs = [
+            field
+            for field in fields
+            if isinstance(field, dict) and field.get("custom") is True
+        ]
 
-    custom_field_defs = [
-        field
-        for field in fields
-        if isinstance(field, dict) and field.get("custom") is True
-    ]
+        if any(
+            not isinstance(field.get("id"), str) or not field["id"]
+            for field in custom_field_defs
+        ):
+            raise _invalid_response("Jira custom field missing a stable id")
 
-    if any(
-        not isinstance(field.get("id"), str) or not field["id"]
-        for field in custom_field_defs
-    ):
-        raise _invalid_response("Jira custom field missing a stable id")
+        by_id: dict[str, Any] = {}
+        for field in custom_field_defs:
+            _keep_first(by_id, field["id"], field)
+        custom_field_defs = [by_id[field_id] for field_id in sorted(by_id)]
 
-    by_id: dict[str, Any] = {}
-    for field in custom_field_defs:
-        _keep_first(by_id, field["id"], field)
-    custom_field_defs = [by_id[field_id] for field_id in sorted(by_id)]
-
-    return [
-        _record(
-            "field",
-            field["id"],
-            endpoint,
-            raw=field,
-            field={
-                "name": field.get("name"),
-                **(
-                    {"schema": {"custom": field["schema"]["custom"]}}
-                    if isinstance(field.get("schema"), dict)
-                    and isinstance(field["schema"].get("custom"), str)
-                    else {}
-                ),
-            },
-        )
-        for field in custom_field_defs
-    ]
+        return [
+            _record(
+                "field",
+                field["id"],
+                endpoint,
+                raw=field,
+                field={
+                    "name": field.get("name"),
+                    **(
+                        {"schema": {"custom": field["schema"]["custom"]}}
+                        if isinstance(field.get("schema"), dict)
+                        and isinstance(field["schema"].get("custom"), str)
+                        else {}
+                    ),
+                },
+            )
+            for field in custom_field_defs
+        ]
 
 
 async def server_version(client: JiraClient) -> str | None:
     """Extract Jira server version.
 
-    Returns version string or None on error.
-    Raises JiraError on non-404 HTTP errors.
+    Returns version string or None when the endpoint is unsupported.
+    Raises JiraError on other HTTP errors.
     """
     try:
-        response = await client.call("getServerInfo")
-        info = response.json()
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code in _UNSUPPORTED_CODES:
+        async with _jira_errors():
+            response = await client.call("getServerInfo")
+            info = response.json()
+    except JiraError as exc:
+        if exc.stage_status == "unsupported":
             return None
-        raise _map_http_error(exc) from exc
-    except httpx.RequestError as exc:
-        raise _map_request_error(exc) from exc
+        raise
 
     if not isinstance(info, dict):
         return None
@@ -192,20 +252,14 @@ async def custom_fields(
     endpoint = "/rest/api/2/customFields"
     field_id_set = set(field_ids)
 
-    try:
+    async with _jira_errors():
         start = start_at
         while True:
             response = await client.call("getCustomFields", startAt=start)
-            payload = response.json()
+            values, total = _paged(
+                response.json(), "values", "Invalid custom fields page"
+            )
 
-            if (
-                not isinstance(payload, dict)
-                or not isinstance(payload.get("values"), list)
-                or not isinstance(payload.get("total"), int)
-            ):
-                raise ValueError("Invalid custom fields page")
-
-            values = payload["values"]
             by_id: dict[str, dict[str, object]] = {}
             for field in values:
                 if not isinstance(field, dict) or not isinstance(field.get("id"), str):
@@ -232,17 +286,10 @@ async def custom_fields(
 
             start += len(values)
             yield Batch([by_id[key] for key in sorted(by_id)], start)
-            if start >= payload["total"]:
+            if start >= total:
                 break
             if not values:
                 raise ValueError("Empty custom fields page before total")
-
-    except httpx.HTTPStatusError as exc:
-        raise _map_http_error(exc) from exc
-    except httpx.RequestError as exc:
-        raise _map_request_error(exc) from exc
-    except ValueError as exc:
-        raise _invalid_response(str(exc), exc) from exc
 
 
 async def custom_field_options(
@@ -253,7 +300,7 @@ async def custom_field_options(
     ``start_at`` is the index into ``field_ids`` to resume from. Raises JiraError
     on validation or HTTP errors.
     """
-    try:
+    async with _jira_errors():
         for index in range(start_at, len(field_ids)):
             field_id = field_ids[index]
             if (
@@ -275,16 +322,12 @@ async def custom_field_options(
                     page=page,
                     useAllContexts=True,
                 )
-                payload = response.json()
+                options, total = _paged(
+                    response.json(),
+                    "options",
+                    "Invalid custom field options page",
+                )
 
-                if (
-                    not isinstance(payload, dict)
-                    or not isinstance(payload.get("options"), list)
-                    or not isinstance(payload.get("total"), int)
-                ):
-                    raise ValueError("Invalid custom field options page")
-
-                options = payload["options"]
                 for option in options:
                     if not isinstance(option, dict) or not isinstance(
                         option.get("id"), int
@@ -311,20 +354,13 @@ async def custom_field_options(
                     )
 
                 seen += len(options)
-                if seen >= payload["total"]:
+                if seen >= total:
                     break
                 if not options:
                     raise ValueError("Empty options page before total")
                 page += 1
 
             yield Batch([by_id[key] for key in sorted(by_id)], index + 1)
-
-    except httpx.HTTPStatusError as exc:
-        raise _map_http_error(exc) from exc
-    except httpx.RequestError as exc:
-        raise _map_request_error(exc) from exc
-    except ValueError as exc:
-        raise _invalid_response(str(exc), exc) from exc
 
 
 async def screens(client: JiraClient, start_at: int = 0) -> AsyncIterator[Batch]:
@@ -335,22 +371,14 @@ async def screens(client: JiraClient, start_at: int = 0) -> AsyncIterator[Batch]
     """
     endpoint = "/rest/api/2/screens"
 
-    try:
+    async with _jira_errors():
         start = start_at
         while True:
             response = await client.call(
                 "getAllScreens", startAt=start, maxResults=SCREENS_PAGE_SIZE
             )
-            payload = response.json()
+            values, total = _paged(response.json(), "screens", "Invalid screens page")
 
-            if (
-                not isinstance(payload, dict)
-                or not isinstance(payload.get("screens"), list)
-                or not isinstance(payload.get("total"), int)
-            ):
-                raise ValueError("Invalid screens page")
-
-            values = payload["screens"]
             by_id: dict[str, dict[str, object]] = {}
             for screen in values:
                 if not isinstance(screen, dict) or not isinstance(
@@ -374,17 +402,10 @@ async def screens(client: JiraClient, start_at: int = 0) -> AsyncIterator[Batch]
 
             start += len(values)
             yield Batch([by_id[key] for key in sorted(by_id, key=int)], start)
-            if start >= payload["total"]:
+            if start >= total:
                 break
             if not values:
                 raise ValueError("Empty screens page before total")
-
-    except httpx.HTTPStatusError as exc:
-        raise _map_http_error(exc) from exc
-    except httpx.RequestError as exc:
-        raise _map_request_error(exc) from exc
-    except ValueError as exc:
-        raise _invalid_response(str(exc), exc) from exc
 
 
 async def screen_tabs(
@@ -395,15 +416,12 @@ async def screen_tabs(
     ``start_at`` is the index into ``screen_ids`` to resume from. Raises JiraError
     on validation or HTTP errors.
     """
-    try:
+    async with _jira_errors():
         for index in range(start_at, len(screen_ids)):
             screen_id = screen_ids[index]
             endpoint = f"/rest/api/2/screens/{screen_id}/tabs"
             response = await client.call("getAllTabs", screenId=screen_id)
-            tabs = response.json()
-
-            if not isinstance(tabs, list):
-                raise ValueError("Invalid screen tabs response")
+            tabs = _require_list(response.json(), "Invalid screen tabs response")
 
             by_id: dict[str, dict[str, object]] = {}
             for position, tab in enumerate(tabs):
@@ -428,34 +446,25 @@ async def screen_tabs(
 
             yield Batch(list(by_id.values()), index + 1)
 
-    except httpx.HTTPStatusError as exc:
-        raise _map_http_error(exc) from exc
-    except httpx.RequestError as exc:
-        raise _map_request_error(exc) from exc
-    except ValueError as exc:
-        raise _invalid_response(str(exc), exc) from exc
-
 
 async def screen_tab_fields(
-    client: JiraClient, tabs: list[tuple[str, str]], start_at: int = 0
+    client: JiraClient, tabs: list[ScreenTab], start_at: int = 0
 ) -> AsyncIterator[Batch]:
-    """Yield the fields on each (screen_id, tab_id) tab, one tab at a time.
+    """Yield the fields on each tab, one tab at a time.
 
     ``start_at`` is the index into ``tabs`` to resume from. Records within a tab
     follow Jira's response order (``position``). Raises JiraError on validation or
     HTTP errors.
     """
-    try:
+    async with _jira_errors():
         for index in range(start_at, len(tabs)):
-            screen_id, tab_id = tabs[index]
+            tab = tabs[index]
+            screen_id, tab_id = tab.screen_id, tab.tab_id
             endpoint = f"/rest/api/2/screens/{screen_id}/tabs/{tab_id}/fields"
             response = await client.call(
                 "getAllFields", screenId=screen_id, tabId=tab_id
             )
-            fields = response.json()
-
-            if not isinstance(fields, list):
-                raise ValueError("Invalid screen fields response")
+            fields = _require_list(response.json(), "Invalid screen fields response")
 
             by_id: dict[str, dict[str, object]] = {}
             for position, field in enumerate(fields):
@@ -486,13 +495,6 @@ async def screen_tab_fields(
 
             yield Batch(list(by_id.values()), index + 1)
 
-    except httpx.HTTPStatusError as exc:
-        raise _map_http_error(exc) from exc
-    except httpx.RequestError as exc:
-        raise _map_request_error(exc) from exc
-    except ValueError as exc:
-        raise _invalid_response(str(exc), exc) from exc
-
 
 def _identifier(value: object) -> str | None:
     """Return a non-empty string or integer identifier as a string."""
@@ -514,11 +516,9 @@ async def projects(client: JiraClient, start_at: int = 0) -> AsyncIterator[Batch
     if start_at >= 1:
         return
     endpoint = "/rest/api/2/project"
-    try:
+    async with _jira_errors():
         response = await client.call("getAllProjects", includeArchived=True)
-        payload = response.json()
-        if not isinstance(payload, list):
-            raise ValueError("Invalid projects response")
+        payload = _require_list(response.json(), "Invalid projects response")
 
         by_id: dict[str, dict[str, object]] = {}
         for project in payload:
@@ -550,13 +550,6 @@ async def projects(client: JiraClient, start_at: int = 0) -> AsyncIterator[Batch
 
         yield Batch([by_id[key] for key in sorted(by_id, key=_numeric_order)], 1)
 
-    except httpx.HTTPStatusError as exc:
-        raise _map_http_error(exc) from exc
-    except httpx.RequestError as exc:
-        raise _map_request_error(exc) from exc
-    except ValueError as exc:
-        raise _invalid_response(str(exc), exc) from exc
-
 
 async def issue_types(client: JiraClient, start_at: int = 0) -> AsyncIterator[Batch]:
     """Yield the issue type inventory (one request, so a single batch).
@@ -567,11 +560,9 @@ async def issue_types(client: JiraClient, start_at: int = 0) -> AsyncIterator[Ba
     if start_at >= 1:
         return
     endpoint = "/rest/api/2/issuetype"
-    try:
+    async with _jira_errors():
         response = await client.call("getIssueAllTypes")
-        payload = response.json()
-        if not isinstance(payload, list):
-            raise ValueError("Invalid issue types response")
+        payload = _require_list(response.json(), "Invalid issue types response")
 
         by_id: dict[str, dict[str, object]] = {}
         for issue_type in payload:
@@ -599,13 +590,6 @@ async def issue_types(client: JiraClient, start_at: int = 0) -> AsyncIterator[Ba
 
         yield Batch([by_id[key] for key in sorted(by_id, key=_numeric_order)], 1)
 
-    except httpx.HTTPStatusError as exc:
-        raise _map_http_error(exc) from exc
-    except httpx.RequestError as exc:
-        raise _map_request_error(exc) from exc
-    except ValueError as exc:
-        raise _invalid_response(str(exc), exc) from exc
-
 
 async def issue_type_schemes(
     client: JiraClient, start_at: int = 0
@@ -618,17 +602,16 @@ async def issue_type_schemes(
     ``expand=issueTypes,defaultIssueType`` and its project associations. Raises
     JiraError on validation or HTTP errors.
     """
-    try:
+    async with _jira_errors():
         response = await client.call("getAllIssueTypeSchemes")
-        listing = response.json()
-        if not isinstance(listing, dict) or not isinstance(
-            listing.get("schemes"), list
-        ):
-            raise ValueError("Invalid issue type schemes response")
+        listing = _require_dict(response.json(), "Invalid issue type schemes response")
+        schemes = _require_list(
+            listing.get("schemes"), "Invalid issue type schemes response"
+        )
         scheme_ids = sorted(
             {
                 identifier
-                for scheme in listing["schemes"]
+                for scheme in schemes
                 if isinstance(scheme, dict)
                 and (identifier := _identifier(scheme.get("id"))) is not None
             },
@@ -698,33 +681,27 @@ async def issue_type_schemes(
                 index + 1,
             )
 
-    except httpx.HTTPStatusError as exc:
-        raise _map_http_error(exc) from exc
-    except httpx.RequestError as exc:
-        raise _map_request_error(exc) from exc
-    except ValueError as exc:
-        raise _invalid_response(str(exc), exc) from exc
-
 
 async def project_workflow_schemes(
-    client: JiraClient, projects: list[tuple[str, str]], start_at: int = 0
+    client: JiraClient, projects: list[ProjectRef], start_at: int = 0
 ) -> AsyncIterator[Batch]:
-    """Yield the workflow scheme assigned to each (project_id, project_key).
+    """Yield the workflow scheme assigned to each project.
 
     ``start_at`` is the index into ``projects`` to resume from. The record is keyed
     by project ID because a workflow scheme can be shared by many projects.
     Raises JiraError on validation or HTTP errors.
     """
-    try:
+    async with _jira_errors():
         for index in range(start_at, len(projects)):
-            project_id, project_key = projects[index]
+            project = projects[index]
+            project_id, project_key = project.project_id, project.key
             endpoint = f"/rest/api/2/project/{project_key}/workflowscheme"
             response = await client.call(
                 "getWorkflowSchemeForProject", projectKeyOrId=project_key
             )
-            scheme = response.json()
+            scheme = _require_dict(response.json(), "Invalid workflow scheme")
 
-            if not isinstance(scheme, dict) or _identifier(scheme.get("id")) is None:
+            if _identifier(scheme.get("id")) is None:
                 raise ValueError("Invalid workflow scheme")
             mappings = scheme.get("issueTypeMappings", {})
             if not isinstance(mappings, dict) or not all(
@@ -756,18 +733,11 @@ async def project_workflow_schemes(
                 index + 1,
             )
 
-    except httpx.HTTPStatusError as exc:
-        raise _map_http_error(exc) from exc
-    except httpx.RequestError as exc:
-        raise _map_request_error(exc) from exc
-    except ValueError as exc:
-        raise _invalid_response(str(exc), exc) from exc
-
 
 async def project_issue_type_view_screens(
-    client: JiraClient, targets: list[tuple[str, str, str]], start_at: int = 0
+    client: JiraClient, targets: list[IssueTypeScreenTarget], start_at: int = 0
 ) -> AsyncIterator[Batch]:
-    """Yield the view screen of each (project_id, project_key, issue_type_id).
+    """Yield the view screen of each project and issue type target.
 
     The screen is the one the project uses for viewing an issue of that type. This
     reads Jira's internal project-settings API (``/rest/projectconfig/1``), which is
@@ -775,9 +745,11 @@ async def project_issue_type_view_screens(
     View operation is exposed, not Create or Edit. ``start_at`` is the index into
     ``targets`` to resume from. Raises JiraError on validation or HTTP errors.
     """
-    try:
+    async with _jira_errors():
         for index in range(start_at, len(targets)):
-            project_id, project_key, issue_type_id = targets[index]
+            target = targets[index]
+            project_id, project_key = target.project.project_id, target.project.key
+            issue_type_id = target.issue_type_id
             endpoint = (
                 f"/rest/projectconfig/1/issuetype/{project_key}/{issue_type_id}/fields"
             )
@@ -834,10 +806,3 @@ async def project_issue_type_view_screens(
                 ],
                 index + 1,
             )
-
-    except httpx.HTTPStatusError as exc:
-        raise _map_http_error(exc) from exc
-    except httpx.RequestError as exc:
-        raise _map_request_error(exc) from exc
-    except ValueError as exc:
-        raise _invalid_response(str(exc), exc) from exc

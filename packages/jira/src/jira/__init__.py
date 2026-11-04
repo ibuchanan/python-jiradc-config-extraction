@@ -2,12 +2,15 @@
 
 from .client import DEFAULT_REQUESTS_PER_MINUTE, JiraClient, SpacingRateLimiter
 from .errors import JiraError, describe_exception
-from .extraction import Batch
+from .extraction import Batch, IssueTypeScreenTarget, ProjectRef, ScreenTab
 
 __all__ = [
     "Batch",
     "DEFAULT_REQUESTS_PER_MINUTE",
+    "IssueTypeScreenTarget",
     "JiraClient",
+    "ProjectRef",
+    "ScreenTab",
     "SpacingRateLimiter",
     "JiraError",
     "describe_exception",

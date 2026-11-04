@@ -48,9 +48,9 @@ Each package keeps its tests in `tests/`. `pytest` is configured at the root to 
 
 ## Adding or changing an extraction stage
 
-1. Add an async generator in `packages/jira/src/jira/extraction.py` that yields `Batch` records (one resumable unit each) and wraps HTTP errors as `JiraError`. Build each record with `_record(...)` and include the full source object as `raw`.
+1. Add an async generator in `packages/jira/src/jira/extraction.py` that yields `Batch` records (one resumable unit each) and wraps its Jira access in the shared `_jira_errors()` context manager. Build each record with `_record(...)` and include the full source object as `raw`.
 2. Call Jira through `client.call("<operationId>", ...)`, using an operation from the bundled OpenAPI spec. An endpoint missing from the spec needs a declared override in the client.
-3. Wire the stage into `export_configuration` in `packages/cli/src/cli/main.py`, with its output file name and any prerequisite stage.
+3. Add a `Stage(...)` entry to the `STAGES` declaration in `packages/cli/src/cli/main.py` with its name, output file name, extractor, and any prerequisite stage. Stage order, resume state, execution, and the coverage summary all derive from that one declaration.
 4. Add tests at the public seam (`cli.main([...])` with a fake handler) and for the extraction function itself.
 5. Update the output-file table in [docs/reference/cli.md](docs/reference/cli.md).
 

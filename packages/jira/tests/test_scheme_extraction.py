@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 
-from jira import JiraClient, JiraError
+from jira import IssueTypeScreenTarget, JiraClient, JiraError, ProjectRef
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -161,7 +161,9 @@ async def test_workflow_schemes_are_keyed_by_project() -> None:
         )
 
     async with _client(handler) as client:
-        records = await _records(client.project_workflow_schemes([("10000", "A")]))
+        records = await _records(
+            client.project_workflow_schemes([ProjectRef("10000", "A")])
+        )
 
     assert requests == ["/jira/rest/api/2/project/A/workflowscheme"]
     assert records[0]["source"]["id"] == "10000"
@@ -180,7 +182,7 @@ async def test_malformed_workflow_mappings_report_what_failed() -> None:
 
     async with _client(handler) as client:
         with pytest.raises(JiraError) as caught:
-            await _records(client.project_workflow_schemes([("10000", "A")]))
+            await _records(client.project_workflow_schemes([ProjectRef("10000", "A")]))
 
     assert caught.value.detail == "Invalid workflow scheme issue type mappings"
 
@@ -222,7 +224,9 @@ async def test_view_screens_use_the_internal_route_and_keep_ids_and_raw_payload(
 
     async with _client(_view_screen_handler(requests)) as client:
         records = await _records(
-            client.project_issue_type_view_screens([("10000", "A", "2")])
+            client.project_issue_type_view_screens(
+                [IssueTypeScreenTarget(ProjectRef("10000", "A"), "2")]
+            )
         )
 
     assert requests == ["/jira/rest/projectconfig/1/issuetype/A/2/fields"]
@@ -242,7 +246,10 @@ async def test_view_screens_use_the_internal_route_and_keep_ids_and_raw_payload(
 @pytest.mark.anyio
 async def test_view_screens_resume_at_the_saved_index() -> None:
     requests: list[str] = []
-    targets = [("10000", "A", "2"), ("10000", "A", "3")]
+    targets = [
+        IssueTypeScreenTarget(ProjectRef("10000", "A"), "2"),
+        IssueTypeScreenTarget(ProjectRef("10000", "A"), "3"),
+    ]
 
     async with _client(_view_screen_handler(requests)) as client:
         records = await _records(client.project_issue_type_view_screens(targets, 1))
@@ -258,6 +265,10 @@ async def test_missing_view_screen_reports_what_failed() -> None:
 
     async with _client(handler) as client:
         with pytest.raises(JiraError) as caught:
-            await _records(client.project_issue_type_view_screens([("1", "A", "2")]))
+            await _records(
+                client.project_issue_type_view_screens(
+                    [IssueTypeScreenTarget(ProjectRef("1", "A"), "2")]
+                )
+            )
 
     assert caught.value.detail == "Invalid view screen"

@@ -35,7 +35,7 @@ The CLI also queries the Jira DC 11.2.1 `GET /rest/api/2/customFields` inventory
 Each line is a schema version 1 record, for example:
 
 ```json
-{"extracted_at":"2026-10-29T00:00:00+00:00","field":{"name":"Team"},"schema_version":1,"source":{"endpoint":"/rest/api/2/field","entity":"field","id":"customfield_10001","system":"jira"}}
+{"extracted_at":"2026-10-29T00:00:00+00:00","field":{"name":"Team","schema":{"custom":"com.atlassian.jira.plugin.system.customfieldtypes:select"}},"raw":{"clauseNames":["cf[10001]","Team"],"custom":true,"id":"customfield_10001","name":"Team","navigable":true,"orderable":true,"schema":{"custom":"com.atlassian.jira.plugin.system.customfieldtypes:select","customId":10001,"type":"any"},"searchable":true},"schema_version":1,"source":{"endpoint":"/rest/api/2/field","entity":"field","id":"customfield_10001","system":"jira"}}
 ```
 
 `source.system`, `source.entity`, and `source.id` identify the source record; `source.endpoint` names the read-only API, and `extracted_at` is the UTC time of this export. The exporter sorts fields by source ID and JSON keys lexicographically; other stages use the per-stage order table in the [CLI reference](../../docs/reference/cli.md#record-order). Each record carries the complete source response (or responses) under `raw`, with no properties dropped; the normalized keys (such as `field`) are a convenience view of the same data. Only `fields.jsonl` also excludes system fields. The type key can identify app-provided fields such as Elements Connect, but does not include their configuration. Names are written verbatim: configuration data is treated as metadata, so no redaction is applied.

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from conftest import FixtureSetup
 
 
-def test_cli_reports_dynamic_forms_not_queried_without_supported_api(
+def test_cli_reports_dynamic_forms_unsupported_without_supported_api(
     tmp_path: Path, monkeypatch: MonkeyPatch, jira_basic_auth_fixture: FixtureSetup
 ) -> None:
     requests: list[httpx.Request] = []
@@ -38,10 +38,12 @@ def test_cli_reports_dynamic_forms_not_queried_without_supported_api(
     coverage = json.loads((tmp_path / "export" / "manifest.json").read_text())[
         "coverage"
     ]
-    assert coverage["dynamic_forms"] == {
-        "status": "unsupported",
-        "reason": "no supported read-only Dynamic Forms DC REST API identified",
-    }
+    gap = coverage["dynamic_forms"]
+    assert gap["status"] == "unsupported"
+    assert gap["reason"] == (
+        "no supported read-only Dynamic Forms DC REST API identified"
+    )
+    assert gap["evidence"]
     assert not (tmp_path / "export" / "dynamic-forms.jsonl").exists()
     assert not (tmp_path / "export" / "associations.jsonl").exists()
     assert all(request.method == "GET" for request in requests)

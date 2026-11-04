@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from .errors import JiraError, describe_exception
+from .status import StageStatus
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
@@ -95,7 +96,10 @@ def _invalid_response(message: str, cause: BaseException | None = None) -> JiraE
     """Report a malformed Jira response; these messages are static and safe to show."""
     logger.debug("Invalid Jira response: %s", message, exc_info=cause)
     return JiraError(
-        message, error_type="ValueError", stage_status="failed", detail=message
+        message,
+        error_type="ValueError",
+        stage_status=StageStatus.FAILED,
+        detail=message,
     )
 
 
@@ -106,7 +110,7 @@ def _map_request_error(exc: httpx.RequestError) -> JiraError:
     return JiraError(
         "Network error",
         error_type="RequestError",
-        stage_status="failed",
+        stage_status=StageStatus.FAILED,
         detail=detail,
     )
 
@@ -115,11 +119,11 @@ def _map_http_error(exc: httpx.HTTPStatusError) -> JiraError:
     """Map HTTP status to JiraError with appropriate stage_status."""
     status_code = exc.response.status_code
     if status_code in _UNAUTHORIZED_CODES:
-        stage_status = "unauthorized"
+        stage_status = StageStatus.UNAUTHORIZED
     elif status_code in _UNSUPPORTED_CODES:
-        stage_status = "unsupported"
+        stage_status = StageStatus.UNSUPPORTED
     else:
-        stage_status = "failed"
+        stage_status = StageStatus.FAILED
     return JiraError(
         f"HTTP {status_code}",
         status_code=status_code,
@@ -230,7 +234,7 @@ async def server_version(client: JiraClient) -> str | None:
             response = await client.call("getServerInfo")
             info = response.json()
     except JiraError as exc:
-        if exc.stage_status == "unsupported":
+        if exc.stage_status is StageStatus.UNSUPPORTED:
             return None
         raise
 

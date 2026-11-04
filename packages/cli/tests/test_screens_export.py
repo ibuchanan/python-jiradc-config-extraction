@@ -93,8 +93,10 @@ def test_cli_exports_screens_tabs_and_tab_fields(
     assert coverage["screens"] == {"status": "complete", "count": 2}
     assert coverage["screen_tabs"]["count"] == len(tabs)
     assert coverage["screen_tab_fields"]["count"] == len(tab_fields)
-    assert "screen_schemes" not in coverage
-    assert "issue_type_screen_schemes" not in coverage
+    assert coverage["screen_schemes"]["status"] == "unsupported"
+    assert coverage["issue_type_screen_schemes"]["status"] == "unsupported"
+    assert coverage["screen_schemes"]["reason"]
+    assert coverage["issue_type_screen_schemes"]["evidence"]
     assert "hidden" not in "".join(
         p.read_text() for p in tmp_path.iterdir() if p.is_file()
     )

@@ -43,10 +43,12 @@ def test_cli_reports_elements_connect_unsupported_without_guessing_api(
     coverage = json.loads((tmp_path / "export" / "manifest.json").read_text())[
         "coverage"
     ]
-    assert coverage["elements_connect"] == {
-        "status": "unsupported",
-        "reason": "no supported read-only Elements Connect DC config API identified",
-    }
+    gap = coverage["elements_connect"]
+    assert gap["status"] == "unsupported"
+    assert gap["reason"] == (
+        "no supported read-only Elements Connect DC config API identified"
+    )
+    assert gap["evidence"]
     assert not (tmp_path / "export" / "elements-connect.jsonl").exists()
     assert not (tmp_path / "export" / "associations.jsonl").exists()
     assert all(request.method == "GET" for request in requests)

@@ -8,7 +8,7 @@ It was built to help migration analysts see how custom fields (especially Elemen
 
 Use it if you can log in to Jira Data Center with an account that can read its configuration, and you want a readable, restartable inventory of what Jira exposes through its REST API.
 
-It is not a migration verdict, and it does not see everything. App configuration for Elements Connect, ScriptRunner, and Dynamic Forms, plus field contexts and screen schemes, is reported as a gap, not collected. A gap means "unknown", not "none". See [why this isn't a database dump](docs/explanation/why-not-a-database-dump.md).
+It is not a migration verdict, and it does not see everything. App configuration for Elements Connect, ScriptRunner, and Dynamic Forms, plus field contexts, field configurations, screen schemes, and issue type screen schemes, is reported as a gap with a reason and evidence, not collected. A gap means "unknown", not "none". See [why this isn't a database dump](docs/explanation/why-not-a-database-dump.md).
 
 ## Quickstart
 

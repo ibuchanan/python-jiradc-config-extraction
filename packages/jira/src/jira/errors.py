@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .status import StageStatus
+
 _MAX_DETAIL_MESSAGE = 200
 
 
@@ -41,7 +43,7 @@ class JiraError(Exception):
     Attributes:
         status_code: HTTP status code if applicable, None for non-HTTP errors.
         error_type: Exception class name (e.g., "HTTPStatusError", "ValueError").
-        stage_status: "unauthorized", "unsupported", or "failed".
+        stage_status: The ``StageStatus`` this failure reports.
         detail: Safe cause summary from ``describe_exception``, if available.
     """
 
@@ -51,13 +53,13 @@ class JiraError(Exception):
         *,
         status_code: int | None = None,
         error_type: str | None = None,
-        stage_status: str = "failed",
+        stage_status: StageStatus | str = StageStatus.FAILED,
         detail: str | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.error_type = error_type or "JiraError"
-        self.stage_status = stage_status
+        self.stage_status = StageStatus(stage_status)
         self.detail = detail
 
     def __str__(self) -> str:

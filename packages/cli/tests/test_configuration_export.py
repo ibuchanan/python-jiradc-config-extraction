@@ -103,8 +103,10 @@ def test_cli_exports_custom_fields_and_options(
         ("customfield_10000:8", "customfield_10000", "Green", True),
     ]
     manifest = json.loads((tmp_path / "export" / "manifest.json").read_text())
-    assert "field_configurations" not in manifest["coverage"]
-    assert "field_config_schemes" not in manifest["coverage"]
+    assert manifest["coverage"]["field_contexts"]["status"] == "unsupported"
+    assert manifest["coverage"]["field_configurations"]["status"] == "unsupported"
+    assert manifest["coverage"]["field_contexts"]["reason"]
+    assert manifest["coverage"]["field_configurations"]["evidence"]
     assert all(request.method == "GET" for request in requests)
 
 

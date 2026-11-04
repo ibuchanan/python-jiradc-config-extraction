@@ -2,18 +2,28 @@
 
 import json
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
 
 from cli import main as cli
+from jira import StageStatus
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from _pytest.capture import CaptureFixture
     from _pytest.monkeypatch import MonkeyPatch
     from conftest import FixtureSetup
+
+_DECLARED_GAP_NAMES = {
+    "field_contexts",
+    "field_configurations",
+    "screen_schemes",
+    "issue_type_screen_schemes",
+    "elements_connect",
+    "dynamic_forms",
+    "scriptrunner",
+}
 
 
 def test_cli_summarizes_empty_queried_stages_and_optional_app_gaps(
@@ -48,11 +58,15 @@ def test_cli_summarizes_empty_queried_stages_and_optional_app_gaps(
     assert "Extracting screens..." in output
     for stage, status in (
         ("screens", "complete (0 records, not found)"),
-        ("elements_connect", "unsupported"),
-        ("dynamic_forms", "unsupported"),
-        ("scriptrunner", "unsupported"),
+        *((name, "unsupported") for name in _DECLARED_GAP_NAMES),
     ):
         assert re.search(rf"(?m)^{stage}\s+{re.escape(status)}\s*$", output)
+    for name in _DECLARED_GAP_NAMES:
+        gap = manifest["coverage"][name]
+        assert gap["status"] == StageStatus.UNSUPPORTED
+        assert gap["reason"]
+        assert gap["evidence"]
+        assert "not found" not in gap["reason"]
     assert (
         "private-password"
         not in output + (tmp_path / "export" / "manifest.json").read_text()
@@ -156,3 +170,16 @@ def test_cli_fails_on_required_jira_stage_and_preserves_retryable_data(
     assert "private-password" not in "".join(
         path.read_text() for path in (tmp_path / "export").iterdir() if path.is_file()
     ) + str(capsys.readouterr())
+
+
+def test_declared_gap_coverage_matches_cli_reference() -> None:
+    reference = (
+        Path(__file__).parents[3] / "docs" / "reference" / "cli.md"
+    ).read_text()
+    section = reference.split("## Declared gaps", 1)[1].split("\n## ", 1)[0]
+    documented = set(re.findall(r"(?m)^\| `([a-z_]+)` \|", section))
+    assert documented == _DECLARED_GAP_NAMES
+    assert {gap.name for gap in cli._DECLARED_GAPS} == _DECLARED_GAP_NAMES
+    for gap in cli._DECLARED_GAPS:
+        assert gap.reason in section
+        assert gap.evidence in section

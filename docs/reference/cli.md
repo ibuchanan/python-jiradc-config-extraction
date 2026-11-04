@@ -49,7 +49,7 @@ Behaviour:
 - On HTTP 429 the wait appears as `(wait:30s)` and the request is retried up to 3 times.
 - Completed stages are skipped on rerun. Failed or interrupted stages resume from their last committed unit.
 
-Exit status: `0` on success; `1` if preflight fails, a queried stage fails, is unauthorized, or is unsupported, or an I/O error occurs. Static `unsupported` gaps for apps do not alone cause a nonzero status.
+Exit status: `0` on success; `1` if preflight fails, a queried stage fails, is unauthorized, or is unsupported, or an I/O error occurs. Declared gaps, which are `unsupported` without being queried, do not alone cause a nonzero status.
 
 ## Output files
 
@@ -100,13 +100,25 @@ Reported in `manifest.json`, `checkpoint.json`, and the final table.
 
 | Status | Meaning |
 | --- | --- |
-| `complete` | Query succeeded. `complete (0 records, not found)` is a successful empty result. |
+| `complete` | Query succeeded. `complete (0 records, not found)` is a successful empty result, never a gap. |
 | `not_queried` | A prerequisite stage did not complete. |
-| `unsupported` | No supported read-only API is known, or Jira answered 404, 405, or 501. This is unknown coverage, not an absence of data. |
+| `unsupported` | No supported read-only API is known, or Jira answered 404, 405, or 501. This is unknown coverage, not an absence of data. Every declared gap below is `unsupported`. |
 | `unauthorized` | Jira answered 401 or 403. |
 | `failed` | The request or response failed. Committed records are kept and `records_written` is reported. |
 
-Statically `unsupported`: `elements_connect`, `scriptrunner`, and `dynamic_forms`, plus field contexts, field configurations, screen schemes, and issue type screen schemes, which are not collected.
+### Declared gaps
+
+These sources are known and in scope, but no supported read-only route was identified. Each appears in `manifest.json` coverage as `unsupported`, with the same `reason` and `evidence` shown here. They are advisory: a declared gap never causes a nonzero exit status on its own.
+
+| Declared gap | Reason | Evidence |
+| --- | --- | --- |
+| `field_contexts` | no supported read-only Jira DC field context API identified | The bundled Jira DC 11.2.1 OpenAPI document defines the FieldConfigScheme bean but no read route; GET /rest/api/2/field/{id}/configschemes returned 404 on Jira DC 11.3.12, and that instance's application.wadl route lists for /rest/api/2 and /rest/projectconfig/1 contain no context route. |
+| `field_configurations` | no supported read-only Jira DC field configuration API identified | The only published route that exposes per-issue-type field settings, GET /rest/projectconfig/1/issuetype/{project}/{issueType}/fields, returns the view screen collected by project_issue_type_view_screens; the bundled spec has no field configuration or field configuration scheme read route. |
+| `screen_schemes` | no supported read-only Jira DC screen scheme API identified | Neither the bundled Jira DC 11.2.1 OpenAPI document nor the application.wadl route lists published by a Jira DC 11.3.12 instance contain a read route for screen schemes. |
+| `issue_type_screen_schemes` | no supported read-only Jira DC issue type screen scheme API identified | Neither the bundled Jira DC 11.2.1 OpenAPI document nor the application.wadl route lists published by a Jira DC 11.3.12 instance contain a read route for issue type screen schemes. |
+| `elements_connect` | no supported read-only Elements Connect DC config API identified | The published Elements Connect REST API (SwaggerHub v2.0) renders field content; the field configuration guide documents individual JSON downloads and an admin Import/Export area, not a read-only configuration REST API. |
+| `dynamic_forms` | no supported read-only Dynamic Forms DC REST API identified | Fields Visibility exports JSON through the admin UI and the Java ExportConfigurationService, not a REST endpoint; no published OpenAPI configuration-inventory spec was located. |
+| `scriptrunner` | no supported read-only ScriptRunner DC REST API identified | Script Registry exports a ZIP/JSON and inventory CSV (documented for 8.54+, 9.19+, 10.0+), and Configuration Exporter is a built-in script; neither is a REST inventory API, and no published OpenAPI configuration spec was located. |
 
 ## Exclusions
 

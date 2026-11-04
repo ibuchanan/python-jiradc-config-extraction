@@ -35,10 +35,12 @@ def test_cli_reports_scriptrunner_gap_without_guessing_an_endpoint(
     coverage = json.loads((tmp_path / "export" / "manifest.json").read_text())[
         "coverage"
     ]
-    assert coverage["scriptrunner"] == {
-        "status": "unsupported",
-        "reason": "no supported read-only ScriptRunner DC REST API identified",
-    }
+    gap = coverage["scriptrunner"]
+    assert gap["status"] == "unsupported"
+    assert gap["reason"] == (
+        "no supported read-only ScriptRunner DC REST API identified"
+    )
+    assert gap["evidence"]
     assert not (tmp_path / "export" / "scriptrunner.jsonl").exists()
     assert not (tmp_path / "export" / "associations.jsonl").exists()
     assert all(request.method == "GET" for request in requests)

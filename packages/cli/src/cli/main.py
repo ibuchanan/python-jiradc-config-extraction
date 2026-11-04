@@ -30,6 +30,7 @@ from jira import (
     JiraError,
     ProjectRef,
     ScreenTab,
+    StageStatus,
     describe_exception,
 )
 
@@ -68,7 +69,9 @@ def _atomic_write(path: Path, content: str) -> None:
             temp_path.unlink(missing_ok=True)
 
 
-def _failure_result(exc: Exception, *, status: str | None = None) -> dict[str, Any]:
+def _failure_result(
+    exc: Exception, *, status: StageStatus | None = None
+) -> dict[str, Any]:
     """Build a safe checkpoint/manifest failure record from an exception."""
     if isinstance(exc, JiraError):
         result: dict[str, Any] = {
@@ -79,7 +82,7 @@ def _failure_result(exc: Exception, *, status: str | None = None) -> dict[str, A
             result["http_status"] = exc.status_code
         detail = exc.detail
     else:
-        result = {"status": status or "failed", "error": type(exc).__name__}
+        result = {"status": status or StageStatus.FAILED, "error": type(exc).__name__}
         detail = describe_exception(exc)
     if detail and detail != result["error"]:
         result["detail"] = detail
@@ -239,7 +242,10 @@ def _issue_type_screen_targets(output_dir: Path) -> list[IssueTypeScreenTarget]:
         if project.project_id not in issue_types_by_project:
             message = "Project is not in any issue type scheme"
             raise JiraError(
-                message, error_type="ValueError", stage_status="failed", detail=message
+                message,
+                error_type="ValueError",
+                stage_status=StageStatus.FAILED,
+                detail=message,
             )
         targets.extend(
             IssueTypeScreenTarget(project, issue_type_id)
@@ -308,14 +314,93 @@ STAGE_ORDER = tuple(stage.name for stage in STAGES)
 _RESUMABLE_STAGES = tuple(stage for stage in STAGES if stage.extract is not None)
 _STAGES_BY_NAME = {stage.name: stage for stage in STAGES}
 
+
+@dataclass(frozen=True)
+class DeclaredGap:
+    """A known source with no supported read-only route.
+
+    A declared gap is reported as ``unsupported`` with a reason and the evidence
+    that no supported read route exists. It is advisory and never makes a run
+    exit non-zero on its own.
+    """
+
+    name: str
+    reason: str
+    evidence: str
+
+
 # Sources with no supported read-only route: declared gaps, not queried stages.
-_DECLARED_GAPS = {
-    "elements_connect": (
-        "no supported read-only Elements Connect DC config API identified"
+_DECLARED_GAPS: tuple[DeclaredGap, ...] = (
+    DeclaredGap(
+        "field_contexts",
+        "no supported read-only Jira DC field context API identified",
+        (
+            "The bundled Jira DC 11.2.1 OpenAPI document defines the "
+            "FieldConfigScheme bean but no read route; "
+            "GET /rest/api/2/field/{id}/configschemes returned 404 on Jira DC "
+            "11.3.12, and that instance's application.wadl route lists for "
+            "/rest/api/2 and /rest/projectconfig/1 contain no context route."
+        ),
     ),
-    "dynamic_forms": "no supported read-only Dynamic Forms DC REST API identified",
-    "scriptrunner": "no supported read-only ScriptRunner DC REST API identified",
-}
+    DeclaredGap(
+        "field_configurations",
+        "no supported read-only Jira DC field configuration API identified",
+        (
+            "The only published route that exposes per-issue-type field "
+            "settings, GET /rest/projectconfig/1/issuetype/{project}/{issueType}"
+            "/fields, returns the view screen collected by "
+            "project_issue_type_view_screens; the bundled spec has no field "
+            "configuration or field configuration scheme read route."
+        ),
+    ),
+    DeclaredGap(
+        "screen_schemes",
+        "no supported read-only Jira DC screen scheme API identified",
+        (
+            "Neither the bundled Jira DC 11.2.1 OpenAPI document nor the "
+            "application.wadl route lists published by a Jira DC 11.3.12 "
+            "instance contain a read route for screen schemes."
+        ),
+    ),
+    DeclaredGap(
+        "issue_type_screen_schemes",
+        "no supported read-only Jira DC issue type screen scheme API identified",
+        (
+            "Neither the bundled Jira DC 11.2.1 OpenAPI document nor the "
+            "application.wadl route lists published by a Jira DC 11.3.12 "
+            "instance contain a read route for issue type screen schemes."
+        ),
+    ),
+    DeclaredGap(
+        "elements_connect",
+        "no supported read-only Elements Connect DC config API identified",
+        (
+            "The published Elements Connect REST API (SwaggerHub v2.0) renders "
+            "field content; the field configuration guide documents individual "
+            "JSON downloads and an admin Import/Export area, not a read-only "
+            "configuration REST API."
+        ),
+    ),
+    DeclaredGap(
+        "dynamic_forms",
+        "no supported read-only Dynamic Forms DC REST API identified",
+        (
+            "Fields Visibility exports JSON through the admin UI and the Java "
+            "ExportConfigurationService, not a REST endpoint; no published "
+            "OpenAPI configuration-inventory spec was located."
+        ),
+    ),
+    DeclaredGap(
+        "scriptrunner",
+        "no supported read-only ScriptRunner DC REST API identified",
+        (
+            "Script Registry exports a ZIP/JSON and inventory CSV (documented "
+            "for 8.54+, 9.19+, 10.0+), and Configuration Exporter is a built-in "
+            "script; neither is a REST inventory API, and no published OpenAPI "
+            "configuration spec was located."
+        ),
+    ),
+)
 
 
 def _tag_api(stage: str, result: dict[str, Any]) -> dict[str, Any]:
@@ -339,9 +424,15 @@ def _describe_state(output_dir: Path) -> list[str]:
         run_id = str(manifest["run_id"])[:8]
         started = manifest["created_at"]
         complete = [
-            n for n in STAGE_ORDER if stages.get(n, {}).get("status") == "complete"
+            n
+            for n in STAGE_ORDER
+            if stages.get(n, {}).get("status") == StageStatus.COMPLETE
         ]
-        failed = [n for n in STAGE_ORDER if stages.get(n, {}).get("status") == "failed"]
+        failed = [
+            n
+            for n in STAGE_ORDER
+            if stages.get(n, {}).get("status") == StageStatus.FAILED
+        ]
         partial = {
             n: progress[n] for n in STAGE_ORDER if isinstance(progress.get(n), dict)
         }
@@ -445,7 +536,7 @@ async def export_fields(
     previous = stages.get(stage.name)
     if (
         isinstance(previous, dict)
-        and previous.get("status") == "complete"
+        and previous.get("status") == StageStatus.COMPLETE
         and (output_dir / stage.filename).exists()
     ):
         coverage[stage.name] = previous
@@ -462,7 +553,7 @@ async def export_fields(
         )
     except (JiraError, ValueError, OSError) as exc:
         console.print()
-        failure = _failure_result(exc, status="failed")
+        failure = _failure_result(exc, status=StageStatus.FAILED)
         stages[stage.name] = failure
         _save_json(checkpoint_path, checkpoint)
         coverage[stage.name] = failure
@@ -470,7 +561,7 @@ async def export_fields(
         raise
     _print_dots(count)
     console.print()
-    complete = {"status": "complete", "count": count}
+    complete = {"status": StageStatus.COMPLETE, "count": count}
     stages[stage.name] = complete
     _save_json(checkpoint_path, checkpoint)
     coverage[stage.name] = complete
@@ -513,7 +604,7 @@ async def _export_stage(
     previous = stages.get(stage.name)
     if (
         isinstance(previous, dict)
-        and previous.get("status") == "complete"
+        and previous.get("status") == StageStatus.COMPLETE
         and (output_dir / stage.filename).exists()
     ):
         coverage[stage.name] = previous
@@ -527,13 +618,13 @@ async def _export_stage(
         (
             name
             for name in stage.prerequisites
-            if stages.get(name, {}).get("status") != "complete"
+            if stages.get(name, {}).get("status") != StageStatus.COMPLETE
         ),
         None,
     )
     if blocker is not None:
         coverage[stage.name] = {
-            "status": "not_queried",
+            "status": StageStatus.NOT_QUERIED,
             "reason": f"{blocker} incomplete",
         }
         _save_json(manifest_path, manifest)
@@ -570,7 +661,9 @@ async def _export_stage(
         _save_json(manifest_path, manifest)
         return
     console.print()
-    result = _tag_api(stage.name, {"status": "complete", "count": stage_file.count})
+    result = _tag_api(
+        stage.name, {"status": StageStatus.COMPLETE, "count": stage_file.count}
+    )
     stages[stage.name] = result
     progress.pop(stage.name, None)
     _save_json(checkpoint_path, checkpoint)
@@ -587,8 +680,12 @@ async def export_configuration(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     coverage = manifest["coverage"]
-    for name, reason in _DECLARED_GAPS.items():
-        coverage[name] = {"status": "unsupported", "reason": reason}
+    for gap in _DECLARED_GAPS:
+        coverage[gap.name] = {
+            "status": StageStatus.UNSUPPORTED,
+            "reason": gap.reason,
+            "evidence": gap.evidence,
+        }
     _save_json(manifest_path, manifest)
     async with _new_client(base_url, user=user, password=password) as client:
         if manifest.get("jira_version") is None:
@@ -613,32 +710,37 @@ def _print_summary(output_dir: Path, *, fields_failed: bool = False) -> bool:
     if fields_failed:
         for stage in queried:
             coverage.setdefault(
-                stage, {"status": "not_queried", "reason": "fields incomplete"}
+                stage,
+                {
+                    "status": StageStatus.NOT_QUERIED,
+                    "reason": "fields incomplete",
+                },
             )
         _save_json(manifest_path, manifest)
     table = Table(title="Coverage summary", box=None, pad_edge=False)
     table.add_column("Stage", style="cyan")
     table.add_column("Status")
     for stage, result in sorted(coverage.items()):
-        status = result["status"]
+        status = StageStatus(result["status"])
         suffix = (
             f" ({result['count']} records"
             + (", not found" if result["count"] == 0 else "")
             + ")"
-            if status == "complete"
+            if status is StageStatus.COMPLETE
             else ""
         )
         style = (
             "green"
-            if status == "complete"
+            if status is StageStatus.COMPLETE
             else "yellow"
-            if status == "not_queried"
+            if status is StageStatus.NOT_QUERIED
             else "red"
         )
-        table.add_row(stage, f"[{style}]{status}{suffix}[/{style}]")
+        table.add_row(stage, f"[{style}]{status.value}{suffix}[/{style}]")
     console.print(table)
     return fields_failed or any(
-        coverage[stage]["status"] != "complete" for stage in queried
+        StageStatus(coverage[stage]["status"]) is not StageStatus.COMPLETE
+        for stage in queried
     )
 
 

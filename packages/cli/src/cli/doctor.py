@@ -12,10 +12,10 @@ import re
 import socket
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
-from urllib.parse import urlsplit
 
 import httpx
 
+from config import url_origin
 from jira import describe_exception
 
 if TYPE_CHECKING:
@@ -34,7 +34,6 @@ PROXY_VARIABLES = (
     "ALL_PROXY",
     "all_proxy",
 )
-_DEFAULT_PORTS = {"http": 80, "https": 443}
 _LOGIN_REASON = re.compile(r"[A-Z_]{1,40}")
 _HTTP_OK = 200
 _HTTP_UNAUTHORIZED = 401
@@ -74,15 +73,12 @@ def _check_config(
 
 
 def _check_url(ctx: dict[str, Any]) -> str:
-    parts = urlsplit(ctx["base_url"])
-    if parts.scheme not in _DEFAULT_PORTS or not parts.hostname:
-        raise _CheckFailedError("url must look like https://host[:port][/context]")
     try:
-        port = parts.port or _DEFAULT_PORTS[parts.scheme]
+        scheme, host, port = url_origin(ctx["base_url"])
     except ValueError as exc:
-        raise _CheckFailedError("url has an invalid port") from exc
-    ctx["host"], ctx["port"] = parts.hostname, port
-    return f"{parts.scheme} {parts.hostname}:{port}"
+        raise _CheckFailedError(str(exc)) from exc
+    ctx["host"], ctx["port"] = host, port
+    return f"{scheme} {host}:{port}"
 
 
 def _check_dns(resolve: Callable[..., Any], ctx: dict[str, Any]) -> str:

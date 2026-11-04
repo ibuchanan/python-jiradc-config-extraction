@@ -13,7 +13,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
-from urllib.parse import urlsplit
 from uuid import uuid4
 
 import typer
@@ -24,7 +23,7 @@ from rich.table import Table
 
 from cli.doctor import run_checks
 from cli.stage_file import StageFile
-from config import load_jira_dc_settings
+from config import load_jira_dc_settings, normalise_url, url_origin
 from jira import (
     Batch,
     IssueTypeScreenTarget,
@@ -35,6 +34,7 @@ from jira import (
     StageStatus,
     describe_exception,
     field_app_associations,
+    natural_sort_key,
 )
 
 if TYPE_CHECKING:
@@ -298,7 +298,7 @@ def _issue_type_screen_targets(output_dir: Path) -> list[IssueTypeScreenTarget]:
         targets.extend(
             IssueTypeScreenTarget(project, issue_type_id)
             for issue_type_id in sorted(
-                issue_types_by_project[project.project_id], key=lambda i: (len(i), i)
+                issue_types_by_project[project.project_id], key=natural_sort_key
             )
         )
     return targets
@@ -530,41 +530,11 @@ def _describe_state(output_dir: Path) -> list[str]:
     return lines
 
 
-_DEFAULT_PORTS = {"http": 80, "https": 443}
-
-
-def _normalised_url(url: str) -> str:
-    """Validate a Jira base URL and return it without a trailing slash."""
-    candidate = url.strip().rstrip("/")
-    parts = urlsplit(candidate)
-    if parts.scheme not in _DEFAULT_PORTS or not parts.hostname:
-        raise ValueError("url must look like https://host[:port][/context]")
-    if parts.username is not None or parts.password is not None:
-        raise ValueError("url must not include a user name or password")
-    if parts.query or parts.fragment:
-        raise ValueError("url must not include a query or fragment")
-    try:
-        _ = parts.port
-    except ValueError as exc:
-        raise ValueError("url has an invalid port") from exc
-    return candidate
-
-
-def _origin(url: str) -> tuple[str, str, int]:
-    """Return the scheme, host, and effective port that identify a Jira instance."""
-    parts = urlsplit(url)
-    return (
-        parts.scheme,
-        parts.hostname or "",
-        parts.port or _DEFAULT_PORTS[parts.scheme],
-    )
-
-
 def _apply_url(settings: JiraDCSettings, url: str) -> JiraDCSettings:
     """Use a validated command-line URL, but never send credentials to another host."""
-    candidate = _normalised_url(url)
-    configured = _normalised_url(settings.url)
-    if _origin(candidate) != _origin(configured):
+    candidate = normalise_url(url)
+    configured = normalise_url(settings.url)
+    if url_origin(candidate) != url_origin(configured):
         raise ValueError(
             f"url {candidate} does not match the credentials file url {configured}: "
             "scheme, host, and port must be the same"
@@ -603,6 +573,31 @@ def _preflight(settings: JiraDCSettings) -> bool:
 
 def _save_json(path: Path, data: dict[str, Any]) -> None:
     _atomic_write(path, json.dumps(data, sort_keys=True) + "\n")
+
+
+def _skip_completed(
+    stage: Stage,
+    output_dir: Path,
+    stages: dict[str, Any],
+    coverage: dict[str, Any],
+    manifest: dict[str, Any],
+) -> int | None:
+    """Reuse a completed stage's coverage and return its count, or None to run it."""
+    previous = stages.get(stage.name)
+    if not (
+        isinstance(previous, dict)
+        and previous.get("status") == StageStatus.COMPLETE
+        and (output_dir / stage.filename).exists()
+    ):
+        return None
+    coverage[stage.name] = previous
+    _save_json(output_dir / "manifest.json", manifest)
+    console.print(
+        f"[dim]Skipping {stage.name}: already complete "
+        f"({previous.get('count')} records)[/dim]"
+    )
+    count = previous.get("count")
+    return count if isinstance(count, int) else 0
 
 
 async def export_fields(
@@ -644,19 +639,9 @@ async def export_fields(
     coverage = manifest["coverage"]
     assert isinstance(stages, dict)
     assert isinstance(coverage, dict)
-    previous = stages.get(stage.name)
-    if (
-        isinstance(previous, dict)
-        and previous.get("status") == StageStatus.COMPLETE
-        and (output_dir / stage.filename).exists()
-    ):
-        coverage[stage.name] = previous
-        _save_json(manifest_path, manifest)
-        console.print(
-            f"[dim]Skipping {stage.name}: already complete "
-            f"({previous['count']} records)[/dim]"
-        )
-        return previous["count"]
+    count = _skip_completed(stage, output_dir, stages, coverage, manifest)
+    if count is not None:
+        return count
     console.print(f"[cyan]Extracting[/cyan] {stage.name}... ", end="")
     try:
         count = await _extract_fields(
@@ -712,18 +697,7 @@ async def _export_stage(
     checkpoint_path = output_dir / "checkpoint.json"
     stages = checkpoint["stages"]
     coverage = manifest["coverage"]
-    previous = stages.get(stage.name)
-    if (
-        isinstance(previous, dict)
-        and previous.get("status") == StageStatus.COMPLETE
-        and (output_dir / stage.filename).exists()
-    ):
-        coverage[stage.name] = previous
-        _save_json(manifest_path, manifest)
-        console.print(
-            f"[dim]Skipping {stage.name}: already complete "
-            f"({previous.get('count')} records)[/dim]"
-        )
+    if _skip_completed(stage, output_dir, stages, coverage, manifest) is not None:
         return
     blocker = next(
         (

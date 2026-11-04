@@ -507,7 +507,8 @@ def _identifier(value: object) -> str | None:
     return str(value) or None
 
 
-def _numeric_order(identifier: str) -> tuple[int, str]:
+def natural_sort_key(identifier: str) -> tuple[int, str]:
+    """Sort canonical integer ID strings by value: shorter first, then text."""
     return (len(identifier), identifier)
 
 
@@ -671,7 +672,7 @@ async def projects(client: JiraClient, start_at: int = 0) -> AsyncIterator[Batch
                 ),
             )
 
-        yield Batch([by_id[key] for key in sorted(by_id, key=_numeric_order)], 1)
+        yield Batch([by_id[key] for key in sorted(by_id, key=natural_sort_key)], 1)
 
 
 async def issue_types(client: JiraClient, start_at: int = 0) -> AsyncIterator[Batch]:
@@ -711,7 +712,7 @@ async def issue_types(client: JiraClient, start_at: int = 0) -> AsyncIterator[Ba
                 ),
             )
 
-        yield Batch([by_id[key] for key in sorted(by_id, key=_numeric_order)], 1)
+        yield Batch([by_id[key] for key in sorted(by_id, key=natural_sort_key)], 1)
 
 
 async def issue_type_schemes(
@@ -738,7 +739,7 @@ async def issue_type_schemes(
                 if isinstance(scheme, dict)
                 and (identifier := _identifier(scheme.get("id"))) is not None
             },
-            key=_numeric_order,
+            key=natural_sort_key,
         )
 
         for index in range(start_at, len(scheme_ids)):
@@ -788,7 +789,7 @@ async def issue_type_schemes(
                         issue_type_scheme={
                             "name": scheme.get("name"),
                             "issue_type_ids": sorted(
-                                {str(i) for i in issue_type_ids}, key=_numeric_order
+                                {str(i) for i in issue_type_ids}, key=natural_sort_key
                             ),
                             "default_issue_type_id": (
                                 _identifier(default.get("id"))
@@ -796,7 +797,7 @@ async def issue_type_schemes(
                                 else None
                             ),
                             "project_ids": sorted(
-                                {str(i) for i in project_ids}, key=_numeric_order
+                                {str(i) for i in project_ids}, key=natural_sort_key
                             ),
                         },
                     )
@@ -917,10 +918,10 @@ async def project_issue_type_view_screens(
                             "screen_name": screen.get("screenName"),
                             "state": screen.get("state"),
                             "shared_with_project_ids": sorted(
-                                {str(i) for i in project_ids}, key=_numeric_order
+                                {str(i) for i in project_ids}, key=natural_sort_key
                             ),
                             "shared_with_issue_type_ids": sorted(
-                                {str(i) for i in issue_type_ids}, key=_numeric_order
+                                {str(i) for i in issue_type_ids}, key=natural_sort_key
                             ),
                             "total_projects_count": screen.get("totalProjectsCount"),
                             "hidden_projects_count": screen.get("hiddenProjectsCount"),

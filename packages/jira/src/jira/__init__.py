@@ -8,6 +8,7 @@ from .extraction import (
     ProjectRef,
     ScreenTab,
     field_app_associations,
+    natural_sort_key,
 )
 from .status import StageStatus
 
@@ -23,4 +24,5 @@ __all__ = [
     "StageStatus",
     "describe_exception",
     "field_app_associations",
+    "natural_sort_key",
 ]

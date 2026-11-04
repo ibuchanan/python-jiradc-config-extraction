@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 from pydantic import ValidationError
 
-from config import load_jira_dc_settings
+from config import load_jira_dc_settings, normalise_url, url_origin
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -56,3 +56,49 @@ def test_missing_or_invalid_fields(tmp_path: Path) -> None:
         load_jira_dc_settings(path)
 
     assert {item["loc"][0] for item in error.value.errors()} == {"url", "password"}
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (" https://jira.example.com/jira/ ", "https://jira.example.com/jira"),
+        ("https://jira.example.com", "https://jira.example.com"),
+    ],
+)
+def test_normalise_url_strips_whitespace_and_trailing_slash(
+    raw: str, expected: str
+) -> None:
+    assert normalise_url(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("url", "message"),
+    [
+        ("jira.example.com", "url must look like"),
+        ("ftp://jira.example.com", "url must look like"),
+        (
+            "https://user:secret@jira.example.com",
+            "url must not include a user name or password",
+        ),
+        ("https://jira.example.com?x=1", "url must not include a query or fragment"),
+        ("https://jira.example.com#frag", "url must not include a query or fragment"),
+        ("https://jira.example.com:bad", "url has an invalid port"),
+    ],
+)
+def test_normalise_url_rejects(url: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        normalise_url(url)
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://jira.example.com/jira", ("https", "jira.example.com", 443)),
+        ("http://jira.example.com", ("http", "jira.example.com", 80)),
+        ("https://jira.example.com:8443", ("https", "jira.example.com", 8443)),
+    ],
+)
+def test_url_origin_uses_the_effective_port(
+    url: str, expected: tuple[str, str, int]
+) -> None:
+    assert url_origin(url) == expected

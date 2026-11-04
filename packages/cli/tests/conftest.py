@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
+from rich.console import Console
 
 from cli import main as cli
 from cli.doctor import CheckResult
@@ -90,6 +91,13 @@ def jira_basic_auth_fixture(tmp_path: Path, monkeypatch: MonkeyPatch) -> Fixture
         monkeypatch.setattr(cli, "JiraClient", make_client)
 
     return setup
+
+
+@pytest.fixture(autouse=True)
+def plain_consoles(monkeypatch: MonkeyPatch) -> None:
+    """Assert on visible text: Rich keeps bold/underline even under ``NO_COLOR``."""
+    monkeypatch.setattr(cli, "console", Console(color_system=None))
+    monkeypatch.setattr(cli, "error_console", Console(stderr=True, color_system=None))
 
 
 @pytest.fixture(autouse=True)

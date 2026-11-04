@@ -186,3 +186,7 @@ The exporter reads `GET /rest/projectconfig/1/issuetype/{projectKey}/{issueTypeI
 ### 14.3 Connection-check command
 
 `doctor` is an additional read-only diagnostic command. URL, DNS, TCP, TLS, proxy, and credential failures are common and otherwise surface as an export failure; `doctor` reports which check failed, stops at the first failure, exits nonzero on `fail`, and never writes export files. `export` reuses the same checks as a preflight before it touches the output directory.
+
+### 14.4 Terminal progress and request pacing
+
+Section 9 requires progress by entity/source stage. The exporter also prints one dot per record written, spaces requests evenly at `REQUESTS_PER_MINUTE` (120, a source constant rather than a command option), and shows a 429 wait inline as `(wait:Ns)` while retrying up to three times. These choices make a long, paced run observable from the terminal without a log, TUI, or progress file. They do not promise configurable pacing, a persisted wait state, or per-record progress as a machine-readable artifact; the coverage summary and checkpoint remain the durable progress record. Preflight and `doctor` requests are outside the pacing.

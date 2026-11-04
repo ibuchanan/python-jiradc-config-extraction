@@ -498,15 +498,20 @@ def _describe_state(output_dir: Path) -> list[str]:
         partial = {
             n: progress[n] for n in STAGE_ORDER if isinstance(progress.get(n), dict)
         }
+        jira_version = manifest.get("jira_version")
     except OSError, ValueError, KeyError, TypeError, AttributeError:
         return [
             "Found existing output that could not be read; the export will report why."
         ]
     if len(complete) == len(STAGE_ORDER):
+        detail = (
+            "only the Jira version will be probed because it was not recorded"
+            if jira_version is None
+            else "no records will be fetched"
+        )
         return [
             f"Resuming run {run_id} (started {started}): every stage is already "
-            "complete, so nothing will be fetched. "
-            "Use a new directory for a fresh export."
+            f"complete; {detail}. Use a new directory for a fresh export."
         ]
     lines = [f"Resuming run {run_id} (started {started})."]
     if complete:

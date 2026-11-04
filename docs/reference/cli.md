@@ -53,6 +53,7 @@ Behaviour:
 
 - The effective URL is validated before `OUTPUT_DIR` is touched. An invalid URL, a URL whose scheme, host, or port differs from the credentials file (so credentials are never sent to an unexpected server), or a preflight failure for an unreachable host stops the run with a clear error.
 - A preflight runs the `doctor` checks for config, network, and credentials. On failure the run stops before `OUTPUT_DIR` is touched.
+- When every stage is already complete, no stage records are refetched. If `manifest.json` has no recorded Jira version, the run still makes one `GET /rest/api/2/serverInfo` probe; otherwise it makes no Jira request after the preflight.
 - Output shows the absolute output directory, the run state (fresh or resuming), and one dot per record written per stage.
 - Requests are paced at `REQUESTS_PER_MINUTE`, set to 120 near the top of `packages/cli/src/cli/main.py`.
 - On HTTP 429 the wait appears as `(wait:30s)` and the request is retried up to 3 times.
@@ -66,25 +67,45 @@ All files are written to `OUTPUT_DIR`. Each line of a `.jsonl` file is one recor
 
 | File | Stage | Source |
 | --- | --- | --- |
-| `fields.jsonl` | fields | `GET /rest/api/2/field` (custom fields only) |
-| `custom-fields.jsonl` | field applicability | `GET /rest/api/2/customFields` |
-| `custom-field-options.jsonl` | options | `GET /rest/api/2/customFields/{id}/options` |
-| `app-inventory.jsonl` | app inventory | `GET /rest/plugins/1.0/` (internal; user-installed apps only) |
-| `associations.jsonl` | field-app associations | Derived from `fields.jsonl` and `app-inventory.jsonl`; no Jira request |
-| `projects.jsonl` | projects | `GET /rest/api/2/project?includeArchived=true` |
-| `issue-types.jsonl` | issue types | `GET /rest/api/2/issuetype` |
-| `issue-type-schemes.jsonl` | issue type schemes | `GET /rest/api/2/issuetypescheme/{id}` and `/associations` |
-| `project-workflow-schemes.jsonl` | workflow schemes | `GET /rest/api/2/project/{key}/workflowscheme` |
-| `project-issue-type-view-screens.jsonl` | view screens | `GET /rest/projectconfig/1/issuetype/{key}/{id}/fields` (internal) |
-| `screens.jsonl` | screens | `GET /rest/api/2/screens` |
-| `screen-tabs.jsonl` | tabs | `GET /rest/api/2/screens/{id}/tabs` |
-| `screen-tab-fields.jsonl` | tab fields | `GET /rest/api/2/screens/{id}/tabs/{id}/fields` |
+| `fields.jsonl` | `fields` | `GET /rest/api/2/field` (custom fields only) |
+| `custom-fields.jsonl` | `custom_fields` | `GET /rest/api/2/customFields` |
+| `custom-field-options.jsonl` | `custom_field_options` | `GET /rest/api/2/customFields/{id}/options` |
+| `app-inventory.jsonl` | `app_inventory` | `GET /rest/plugins/1.0/` (internal; user-installed apps only) |
+| `associations.jsonl` | `associations` | Derived from `fields.jsonl` and `app-inventory.jsonl`; no Jira request |
+| `projects.jsonl` | `projects` | `GET /rest/api/2/project?includeArchived=true` |
+| `issue-types.jsonl` | `issue_types` | `GET /rest/api/2/issuetype` |
+| `issue-type-schemes.jsonl` | `issue_type_schemes` | `GET /rest/api/2/issuetypescheme/{id}` and `/associations` |
+| `project-workflow-schemes.jsonl` | `project_workflow_schemes` | `GET /rest/api/2/project/{key}/workflowscheme` |
+| `project-issue-type-view-screens.jsonl` | `project_issue_type_view_screens` | `GET /rest/projectconfig/1/issuetype/{key}/{id}/fields` (internal) |
+| `screens.jsonl` | `screens` | `GET /rest/api/2/screens` |
+| `screen-tabs.jsonl` | `screen_tabs` | `GET /rest/api/2/screens/{id}/tabs` |
+| `screen-tab-fields.jsonl` | `screen_tab_fields` | `GET /rest/api/2/screens/{id}/tabs/{id}/fields` |
 | `manifest.json` | | Schema version, run ID, creation time, Jira version, detected app versions, per-stage coverage. |
 | `checkpoint.json` | | Per-stage status, counts, safe error type and HTTP status, resume progress. |
 
 Stages that need earlier stages (`project_workflow_schemes`, the view screens, the screen children) report `not_queried` until their prerequisite is `complete`.
 
 Two stages use internal, undocumented APIs: `project_issue_type_view_screens` reads `/rest/projectconfig/1/...`, and `app_inventory` reads the UPM REST module at `/rest/plugins/1.0/`. Their coverage entries carry `"api": "internal"`.
+
+### Record order
+
+Each stage writes its records unit by unit in the order shown below. A unit is one Jira page, one custom field, one screen, one tab, or one project, depending on the stage. "String" order compares the IDs as text; "numeric" order compares them as whole numbers.
+
+| Stage | Order within a unit |
+| --- | --- |
+| `fields` | Custom field ID, string ascending. |
+| `custom_fields` | Jira page order, then field ID string ascending within each page. |
+| `custom_field_options` | Fields in `fields.jsonl` order, then option ID string ascending within each field. |
+| `app_inventory` | App key string ascending. |
+| `associations` | Association source ID string ascending. |
+| `projects` | Project ID numeric ascending. |
+| `issue_types` | Issue type ID numeric ascending. |
+| `issue_type_schemes` | Scheme ID numeric ascending. |
+| `project_workflow_schemes` | Projects in `projects.jsonl` order. |
+| `project_issue_type_view_screens` | Projects in `projects.jsonl` order, then issue type ID numeric ascending within each project. |
+| `screens` | Jira page order, then screen ID numeric ascending within each page. |
+| `screen_tabs` | Screens in `screens.jsonl` order, then Jira response order within each screen (`position`). |
+| `screen_tab_fields` | Tabs in `screen-tabs.jsonl` order, then Jira response order within each tab (`position`). |
 
 ### App inventory and associations
 
@@ -109,7 +130,7 @@ Schema version 1.
 | `raw` | The complete source response as Jira returned it. A record assembled from more than one response keeps each response under its own key. An association keeps `field` and `app`. |
 | other keys | A normalized view of selected properties, named for the entity. |
 
-Records are written in the order Jira returned them, except that `fields.jsonl` and each page or unit's own records are sorted by ID.
+Records are grouped by stage and then by unit. See [Record order](#record-order) for the order within each stage; do not assume one global sort across a file.
 
 ### Duplicate source IDs
 

@@ -8,7 +8,7 @@ It was built to help migration analysts see how custom fields (especially Elemen
 
 Use it if you can log in to Jira Data Center with an account that can read its configuration, and you want a readable, restartable inventory of what Jira exposes through its REST API.
 
-It is not a migration verdict, and it does not see everything. App configuration for Elements Connect, ScriptRunner, and Dynamic Forms, plus field contexts, field configurations, screen schemes, and issue type screen schemes, is reported as a gap with a reason and evidence, not collected. A gap means "unknown", not "none". Where Jira's plugin manager is readable, it does record which user-installed apps are present and their versions, and links a field to an app by its exact type key; that is presence evidence, not app configuration. See [why this isn't a database dump](docs/explanation/why-not-a-database-dump.md).
+It is not a migration verdict, and it does not see everything. Seven sources are reported in `manifest.json` coverage as `unsupported` gaps with a reason and evidence, not collected: `field_contexts`, `field_configurations`, `screen_schemes`, `issue_type_screen_schemes`, `elements_connect`, `dynamic_forms`, and `scriptrunner`. A gap means "unknown", not "none". Where Jira's plugin manager is readable, it does record which user-installed apps are present and their versions, and links a field to an app by its exact type key; that is presence evidence, not app configuration. See [why this isn't a database dump](docs/explanation/why-not-a-database-dump.md) and the [recorded scope decisions](specs/SPEC.md#14-recorded-scope-decisions).
 
 ## Quickstart
 

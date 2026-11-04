@@ -35,7 +35,7 @@ The CLI must never modify Jira or app configuration.
 
 - Declare a field or Jira instance “Cloud-migratable” or “not migratable.”
 - Recommend replacements, redesigns, or remediation plans.
-- Extract all Jira configuration (for example workflows, permissions, and project settings) unless later added as a separate scope.
+- Extract all Jira configuration (for example workflows, permissions, and project settings) unless later added as a separate scope. The one recorded exception is the project workflow scheme link in section 14.1; workflow definitions remain out of scope.
 - Change Jira or app configuration.
 - Guarantee extraction of app data that is not exposed through an accessible, supported API.
 
@@ -89,19 +89,25 @@ Installed app versions are read from Jira's UPM REST module at `GET /rest/plugin
 
 Write a directory-based JSON Lines data set rather than a single JSON document or CSV. Each line is one normalized record. The output must be deterministic enough for downstream tooling and must include provenance such as source system, source entity identifier, source endpoint or source category, and extraction timestamp.
 
-A proposed layout (to validate during implementation):
+The layout (schema version 1):
 
 ```text
 <output-dir>/
   manifest.json
   checkpoint.json
   fields.jsonl
-  field-contexts.jsonl
-  field-configurations.jsonl
-  screens.jsonl
-  screen-schemes.jsonl
+  custom-fields.jsonl
+  custom-field-options.jsonl
   app-inventory.jsonl
   associations.jsonl
+  projects.jsonl
+  issue-types.jsonl
+  issue-type-schemes.jsonl
+  project-workflow-schemes.jsonl
+  project-issue-type-view-screens.jsonl
+  screens.jsonl
+  screen-tabs.jsonl
+  screen-tab-fields.jsonl
 ```
 
 The manifest describes the export schema version, Jira/app versions where known, run identity/timestamps, and source/entity coverage. The checkpoint records completed and failed entity-type stages and enough error context to resume safely, without storing credentials.
@@ -163,4 +169,20 @@ Exact command names/options are implementation design decisions, but the initial
 
 ## 13. Current project constraints
 
-The repository is presently a skeleton. `pyproject.toml` defines a Python project with Python `>=3.14`, dependencies including `httpx`, `httpx-limiter`, `openapi-httpx-client`, `rich`, and `typer`, and dev tools including `pytest`, `ruff`, and `ty`. These are current repository facts, not decisions that the product must retain; dependency and runtime choices should be revisited during implementation planning.
+The project is implemented as a uv workspace. `pyproject.toml` defines Python `>=3.14`, dependencies including `httpx`, `httpx-limiter`, `openapi-httpx-client`, `rich`, and `typer`, and dev tools including `pytest`, `ruff`, and `ty`. These are current repository facts, not decisions that the product must retain; dependency and runtime choices should be revisited during implementation planning.
+
+## 14. Recorded scope decisions
+
+These decisions are deliberate and bound the initial release. Recording them here keeps them from reading as silent scope creep.
+
+### 14.1 Project workflow scheme link
+
+Non-goals exclude extracting all Jira configuration, including workflows. The exporter nevertheless reads `GET /rest/api/2/project/{projectKey}/workflowscheme` once per project and records the scheme ID and name, the default workflow, and the issue-type-to-workflow names. The field and screen inventory is hard to use without knowing which workflow a project and issue type run; one read per project is cheap and read-only. The boundary is deliberate: workflow definitions, transitions, conditions, validators, post-functions, and permissions are not extracted.
+
+### 14.2 Internal project-config API for view screens
+
+The exporter reads `GET /rest/projectconfig/1/issuetype/{projectKey}/{issueTypeId}/fields` to record the view screen for each project and issue type. No documented Jira DC route exposes that association, and the route is read-only. The risk is bounded by marking the stage `"api": "internal"`, recording failures in coverage instead of fabricating records, and limiting the normalized view to the View screen. Create and edit screens remain in `raw` only, and field configurations, field contexts, and screen schemes remain declared gaps. The route is undocumented and may change between Jira versions.
+
+### 14.3 Connection-check command
+
+`doctor` is an additional read-only diagnostic command. URL, DNS, TCP, TLS, proxy, and credential failures are common and otherwise surface as an export failure; `doctor` reports which check failed, stops at the first failure, exits nonzero on `fail`, and never writes export files. `export` reuses the same checks as a preflight before it touches the output directory.

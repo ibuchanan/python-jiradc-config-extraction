@@ -105,16 +105,52 @@ def test_rerun_after_failure_describes_resume_and_skips_finished_stages(
     )
 
 
-def test_completed_export_says_nothing_will_be_fetched(
+def test_completed_export_only_probes_a_missing_version(
     tmp_path: Path, capsys: CaptureFixture[str], jira_basic_auth_fixture: FixtureSetup
 ) -> None:
-    jira_basic_auth_fixture("https://jira.example.com", _handler())
+    requests: list[str] = []
+    inner = _handler()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        return inner(request)
+
+    jira_basic_auth_fixture("https://jira.example.com", handler)
     assert cli.main(["export", "out"]) == 0
     capsys.readouterr()
+    requests.clear()
 
     assert cli.main(["export", "out"]) == 0
 
-    assert "every stage is already complete" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "every stage is already complete" in out
+    assert "only the Jira version will be probed because it was not recorded" in out
+    assert "nothing will be fetched" not in out
+    assert requests == ["/rest/api/2/serverInfo"]
+
+
+def test_completed_export_with_recorded_version_makes_no_requests(
+    tmp_path: Path, capsys: CaptureFixture[str], jira_basic_auth_fixture: FixtureSetup
+) -> None:
+    requests: list[str] = []
+    inner = _handler()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/serverInfo"):
+            requests.append(request.url.path)
+            return httpx.Response(200, json={"version": "11.3.12"})
+        return inner(request)
+
+    jira_basic_auth_fixture("https://jira.example.com", handler)
+    assert cli.main(["export", "out"]) == 0
+    capsys.readouterr()
+    requests.clear()
+
+    assert cli.main(["export", "out"]) == 0
+
+    out = capsys.readouterr().out
+    assert "every stage is already complete; no records will be fetched" in out
+    assert requests == []
 
 
 def test_failed_preflight_stops_before_creating_output(

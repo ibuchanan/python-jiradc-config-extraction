@@ -33,7 +33,7 @@ You'll notice that `uv` creates a `.venv` directory and, if needed, downloads Py
 uv run pytest
 ```
 
-The run ends with a line such as `82 passed`. The tests use fake responses, so they do not contact Jira.
+The run ends with a summary line that reports how many tests passed and no failures. The tests use fake responses, so they do not contact Jira.
 
 ## 4. Tell the tool where Jira is
 
@@ -80,7 +80,7 @@ head -n 1 ./export/fields.jsonl
 
 You now have one JSON record per line in files such as `fields.jsonl` and `screens.jsonl`, plus `manifest.json` and `checkpoint.json`.
 
-Run the same `export` command again. The stages that are already complete print a `Skipping` line instead of fetching again.
+Run the same `export` command again. The stages that are already complete print a `Skipping` line instead of fetching again. If the first run could not record the Jira version, the rerun still probes `GET /rest/api/2/serverInfo` once; no stage records are refetched.
 
 ## What we did
 

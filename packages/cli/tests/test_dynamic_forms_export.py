@@ -45,7 +45,7 @@ def test_cli_reports_dynamic_forms_unsupported_without_supported_api(
     )
     assert gap["evidence"]
     assert not (tmp_path / "export" / "dynamic-forms.jsonl").exists()
-    assert not (tmp_path / "export" / "associations.jsonl").exists()
+    assert (tmp_path / "export" / "associations.jsonl").read_text() == ""
     assert all(request.method == "GET" for request in requests)
 
     assert cli.main(args) == 0

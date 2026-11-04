@@ -20,7 +20,7 @@ def _lines(path: Path) -> list[dict[str, Any]]:
 
 
 def _handler(*, projects_status: int = 200) -> Any:  # noqa: ANN401
-    def handler(request: httpx.Request) -> httpx.Response:  # noqa: PLR0911
+    def handler(request: httpx.Request) -> httpx.Response:  # noqa: PLR0911, PLR0912
         path = request.url.path
         if path.endswith("/serverInfo"):
             return httpx.Response(404)
@@ -28,6 +28,8 @@ def _handler(*, projects_status: int = 200) -> Any:  # noqa: ANN401
             return httpx.Response(200, json=[])
         if path.endswith("/customFields"):
             return httpx.Response(200, json={"values": [], "total": 0})
+        if path.endswith("/rest/plugins/1.0/"):
+            return httpx.Response(200, json={"plugins": [], "total": 0})
         if path.endswith("/rest/api/2/screens"):
             return httpx.Response(200, json={"screens": [], "total": 0})
         if path.endswith("/rest/api/2/project"):

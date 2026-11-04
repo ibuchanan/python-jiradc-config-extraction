@@ -25,6 +25,7 @@ from cli.doctor import run_checks
 from cli.stage_file import StageFile
 from config import load_jira_dc_settings
 from jira import (
+    Batch,
     IssueTypeScreenTarget,
     JiraClient,
     JiraError,
@@ -32,12 +33,11 @@ from jira import (
     ScreenTab,
     StageStatus,
     describe_exception,
+    field_app_associations,
 )
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
-
-    from jira import Batch
 
     type ExtractFunc = Callable[[JiraClient, Path, int], AsyncIterator[Batch]]
 
@@ -123,6 +123,10 @@ class Stage:
     ``extract`` is ``None`` for the fields stage, which replaces one whole file
     atomically instead of committing resumable batches; every other stage yields
     ``Batch`` records for ``StageFile`` to append and checkpoint.
+
+    ``advisory`` stages are supplementary evidence. A missing, unauthorized, or
+    unsupported advisory stage is reported in coverage but does not by itself
+    make the run exit non-zero.
     """
 
     name: str
@@ -130,6 +134,7 @@ class Stage:
     extract: ExtractFunc | None = None
     prerequisites: tuple[str, ...] = ()
     internal_api: bool = False
+    advisory: bool = False
 
 
 def _announce_wait(seconds: float) -> None:
@@ -174,6 +179,23 @@ def _field_ids(output_dir: Path) -> list[str]:
     return _source_ids(output_dir / "fields.jsonl")
 
 
+def _app_versions(output_dir: Path) -> dict[str, str]:
+    """Read detected app versions from the app inventory, if it was written."""
+    path = output_dir / _STAGES_BY_NAME["app_inventory"].filename
+    if not path.exists():
+        return {}
+    versions: dict[str, str] = {}
+    for record in _read_jsonl(path):
+        app = record.get("app")
+        if not isinstance(app, dict):
+            continue
+        key = app.get("key")
+        version = app.get("version")
+        if isinstance(key, str) and key and isinstance(version, str) and version:
+            versions[key] = version
+    return versions
+
+
 def _screen_ids(output_dir: Path) -> list[str]:
     """Read the screen IDs written by the screens stage."""
     return _source_ids(output_dir / "screens.jsonl")
@@ -197,6 +219,27 @@ def _custom_field_options(
     client: JiraClient, output_dir: Path, start: int
 ) -> AsyncIterator[Batch]:
     return client.custom_field_options(_field_ids(output_dir), start)
+
+
+def _app_inventory(
+    client: JiraClient, _output_dir: Path, start: int
+) -> AsyncIterator[Batch]:
+    return client.installed_apps(start)
+
+
+async def _field_app_associations(
+    _client: JiraClient, output_dir: Path, start: int
+) -> AsyncIterator[Batch]:
+    """Link fields to detected apps; one derived batch, no Jira request."""
+    if start >= 1:
+        return
+    yield Batch(
+        field_app_associations(
+            _read_jsonl(output_dir / _STAGES_BY_NAME["fields"].filename),
+            _read_jsonl(output_dir / _STAGES_BY_NAME["app_inventory"].filename),
+        ),
+        1,
+    )
 
 
 def _projects(
@@ -284,6 +327,21 @@ STAGES: tuple[Stage, ...] = (
     Stage("fields", "fields.jsonl"),
     Stage("custom_fields", "custom-fields.jsonl", _custom_fields),
     Stage("custom_field_options", "custom-field-options.jsonl", _custom_field_options),
+    Stage(
+        "app_inventory",
+        "app-inventory.jsonl",
+        _app_inventory,
+        internal_api=True,
+        advisory=True,
+    ),
+    Stage(
+        "associations",
+        "associations.jsonl",
+        _field_app_associations,
+        prerequisites=("app_inventory",),
+        internal_api=True,
+        advisory=True,
+    ),
     Stage("projects", "projects.jsonl", _projects),
     Stage("issue_types", "issue-types.jsonl", _issue_types),
     Stage("issue_type_schemes", "issue-type-schemes.jsonl", _issue_type_schemes),
@@ -378,7 +436,8 @@ _DECLARED_GAPS: tuple[DeclaredGap, ...] = (
             "The published Elements Connect REST API (SwaggerHub v2.0) renders "
             "field content; the field configuration guide documents individual "
             "JSON downloads and an admin Import/Export area, not a read-only "
-            "configuration REST API."
+            "configuration REST API. The UPM module used for installed-app "
+            "versions lists plugins, not app configuration."
         ),
     ),
     DeclaredGap(
@@ -699,6 +758,12 @@ async def export_configuration(
         for stage in _RESUMABLE_STAGES:
             await _export_stage(client, stage, output_dir, manifest, checkpoint)
 
+    if coverage.get("app_inventory", {}).get("status") == StageStatus.COMPLETE:
+        manifest["app_versions"] = _app_versions(output_dir)
+    else:
+        manifest["app_versions"] = {}
+    _save_json(manifest_path, manifest)
+
 
 def _print_summary(output_dir: Path, *, fields_failed: bool = False) -> bool:
     manifest_path = output_dir / "manifest.json"
@@ -717,6 +782,7 @@ def _print_summary(output_dir: Path, *, fields_failed: bool = False) -> bool:
                 },
             )
         _save_json(manifest_path, manifest)
+    advisory = {stage.name for stage in _RESUMABLE_STAGES if stage.advisory}
     table = Table(title="Coverage summary", box=None, pad_edge=False)
     table.add_column("Stage", style="cyan")
     table.add_column("Status")
@@ -733,7 +799,7 @@ def _print_summary(output_dir: Path, *, fields_failed: bool = False) -> bool:
             "green"
             if status is StageStatus.COMPLETE
             else "yellow"
-            if status is StageStatus.NOT_QUERIED
+            if status is StageStatus.NOT_QUERIED or stage in advisory
             else "red"
         )
         table.add_row(stage, f"[{style}]{status.value}{suffix}[/{style}]")
@@ -741,6 +807,7 @@ def _print_summary(output_dir: Path, *, fields_failed: bool = False) -> bool:
     return fields_failed or any(
         StageStatus(coverage[stage]["status"]) is not StageStatus.COMPLETE
         for stage in queried
+        if stage not in advisory
     )
 
 

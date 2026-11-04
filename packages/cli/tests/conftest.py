@@ -36,6 +36,8 @@ def _with_empty_inventories(
             return httpx.Response(200, json=[])
         if path.endswith("/rest/api/2/issuetypescheme"):
             return httpx.Response(200, json={"schemes": []})
+        if path.endswith("/rest/plugins/1.0/"):
+            return httpx.Response(200, json={"plugins": [], "total": 0})
         return handler(request)
 
     return wrapped

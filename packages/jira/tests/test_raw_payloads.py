@@ -73,6 +73,16 @@ def _handler(request: httpx.Request) -> httpx.Response:
             {"id": "1", "sentinel": "association"}
         ],
         "/api/2/project/A/workflowscheme": {"id": 7, "sentinel": "workflow-scheme"},
+        "/plugins/1.0/": {
+            "plugins": [
+                {
+                    "key": "com.example.app",
+                    "userInstalled": True,
+                    "version": "1.0",
+                    "sentinel": "app",
+                }
+            ]
+        },
         "/projectconfig/1/issuetype/A/2/fields": {
             "viewScreen": {"screenId": 7, "sentinel": "view"},
             "createScreen": {"sentinel": "create"},
@@ -104,6 +114,7 @@ async def test_every_record_builder_keeps_the_complete_source_payload() -> None:
             "project_workflow_scheme": await _records(
                 client.project_workflow_schemes([ProjectRef("1", "A")])
             ),
+            "app": await _records(client.installed_apps()),
         }
         schemes = await _records(client.issue_type_schemes())
         view_screens = await _records(
@@ -122,6 +133,7 @@ async def test_every_record_builder_keeps_the_complete_source_payload() -> None:
         "project": "project",
         "issue_type": "issue-type",
         "project_workflow_scheme": "workflow-scheme",
+        "app": "app",
     }
     for entity, sentinel in sentinels.items():
         assert single_response_records[entity][0]["raw"]["sentinel"] == sentinel

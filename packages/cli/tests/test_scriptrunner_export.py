@@ -42,7 +42,7 @@ def test_cli_reports_scriptrunner_gap_without_guessing_an_endpoint(
     )
     assert gap["evidence"]
     assert not (tmp_path / "export" / "scriptrunner.jsonl").exists()
-    assert not (tmp_path / "export" / "associations.jsonl").exists()
+    assert (tmp_path / "export" / "associations.jsonl").read_text() == ""
     assert all(request.method == "GET" for request in requests)
 
     assert cli.main(args) == 0

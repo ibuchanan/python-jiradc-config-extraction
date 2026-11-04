@@ -51,12 +51,15 @@ The CLI must never modify Jira or app configuration.
 
 ### App configuration and associations
 
-- Elements Connect field configuration and metadata exposed by its supported API.
-- Direct associations between Elements Connect fields and Dynamic Forms configuration/behavior, where the app API exposes those relationships.
-- Direct associations between fields/screens and ScriptRunner configuration/behavior, where the app API exposes those relationships.
-- Other relevant app-provided configuration only when explicitly supported by an adapter and within the defined scope.
+**Scope decision (2026-11-03):** the initial release does **not** extract app configuration. No supported read-only configuration API was identified for Elements Connect, Dynamic Forms, or ScriptRunner, so each is reported as a declared gap with a reason and the evidence that no supported read route exists (section 6). The documented vendor exports are administration-screen downloads, not read-only configuration REST APIs; see [plugin-api-references.md](plugin-api-references.md). The extractor must not guess an endpoint or infer app configuration from field names.
 
-An association must be supported by extracted source evidence (for example, an app configuration record referencing a field ID). The extractor must not infer an association solely from a field name or a heuristic match without labeling it as an inference. The initial version should prefer direct indicators and preserve enough provenance for analysts to assess them.
+What the initial release does collect:
+
+- The installed user-installed app inventory and version, when Jira's UPM REST module (`GET /rest/plugins/1.0/`) is accessible. This is app presence/version evidence, not app configuration. The UPM module is internal and undocumented, so the stage is marked `"api": "internal"`, and it is advisory: an unavailable or unauthorized inventory is a coverage gap, not a failed required stage.
+- A field-to-app association when a custom field's `schema.custom` type key begins with the exact key of a detected installed app. The complete field and app responses are preserved under `raw`, so the evidence is auditable. This is direct identifier evidence, not an association to app configuration; it does not claim the app's datasource, scripts, or behavior are known.
+- No Elements Connect, Dynamic Forms, or ScriptRunner configuration record is fabricated. Those sources remain declared gaps.
+
+An association must be supported by extracted source evidence. The extractor must not infer an association solely from a field name or a heuristic match without labeling it as an inference. The only association in this release is an exact match between a field type key and an installed app key.
 
 ## 6. Sources and capability reporting
 
@@ -70,6 +73,8 @@ At the beginning of a run, discover or validate available sources where feasible
 - extraction status and errors.
 
 If an app API is unavailable, unauthorized, or unsupported, the run must report that gap. Do not silently report the related app configuration as fully extracted.
+
+Installed app versions are read from Jira's UPM REST module at `GET /rest/plugins/1.0/` when the account can use it. UPM is internal and undocumented, so it is not an app-configuration source and its coverage entry is marked `"api": "internal"`. If it is unavailable or unauthorized, no app version is recorded; the map stays empty rather than guessing.
 
 ## 7. Authentication and safety
 
@@ -95,7 +100,7 @@ A proposed layout (to validate during implementation):
   field-configurations.jsonl
   screens.jsonl
   screen-schemes.jsonl
-  app-configurations.jsonl
+  app-inventory.jsonl
   associations.jsonl
 ```
 
@@ -127,8 +132,8 @@ Exact command names/options are implementation design decisions, but the initial
 
 1. The CLI can connect to a configured Jira DC site using HTTP Basic authentication without exposing the password in process output or artifacts.
 2. It extracts the in-scope Jira field, screen, and relationship records available to the authenticated account.
-3. It queries supported app APIs for in-scope app configuration and field/screen associations.
-4. It records direct association evidence and provenance; it does not label an association as a migration blocker without a separately defined rule and evidence.
+3. It queries supported app APIs for in-scope app configuration and field/screen associations where a supported read source exists. In this release that is the UPM installed-app inventory and exact field-to-app type-key evidence; app configuration itself is reported as a gap.
+4. It records direct association evidence and provenance; it does not label an association as a migration blocker without a separately defined rule and evidence. It does not invent an app-configuration association.
 5. It writes records incrementally in JSONL and maintains a checkpoint that supports retrying an incomplete entity stage.
 6. Re-running after interruption does not lose completed stages or create duplicate logical records.
 7. It records source/version/capability coverage and surfaces unavailable or unauthorized integrations.
@@ -138,7 +143,8 @@ Exact command names/options are implementation design decisions, but the initial
 ## 11. Acceptance criteria for an initial implementation
 
 - A fixture-driven test demonstrates extraction and normalized records for representative custom fields, contexts, screens, tabs, and placements.
-- A fixture-driven test demonstrates an Elements Connect field with an explicit app-config association and preserves the association’s source evidence.
+- A fixture-driven test demonstrates an Elements Connect field linked by exact field-type-key evidence to a detected installed app record, preserving source endpoint, source ID, extraction time, and the complete raw field and app objects. No app configuration is fabricated; the configuration gap is reported with evidence.
+- Installed app versions are recorded where UPM exposes them; unavailable or versionless apps remain absent and are not guessed.
 - Dynamic Forms and ScriptRunner being unavailable or unauthorized is represented as an explicit coverage gap, not as “no configuration found.”
 - A simulated interruption during one entity stage followed by rerun preserves completed stages, retries the interrupted stage, and produces no duplicate records.
 - The export password is absent from JSONL, checkpoint/manifest data, and logs; a secret-like value returned by a fixture is preserved verbatim under `raw`.

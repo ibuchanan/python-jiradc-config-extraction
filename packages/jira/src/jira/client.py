@@ -38,6 +38,7 @@ READ_OPERATIONS = frozenset(
         "getAssociatedProjects",
         "getWorkflowSchemeForProject",
         "getProjectConfigIssueTypeFields",
+        "getInstalledPlugins",
     }
 )
 _WIRE_BODY_HEADERS = frozenset(
@@ -97,6 +98,9 @@ def _declare_undocumented_api(definition: dict[str, Any]) -> None:
       to Jira's internal project-settings API, not the documented REST API, so it
       may change between versions. It reports the screen a project's issue type
       uses for viewing an issue.
+    * ``/plugins/1.0/`` is the UPM REST module, not part of the public Jira REST
+      API. It lists installed plugins, which is the only source used for detected
+      app versions; it is not an app-configuration API.
     """
     paths = definition["paths"]
     operation = paths["/api/2/issuetypescheme/{schemeId}"]["get"]
@@ -115,6 +119,13 @@ def _declare_undocumented_api(definition: dict[str, Any]) -> None:
                 }
                 for name in ("projectKey", "issueTypeId")
             ],
+            "responses": {"200": {"description": "OK"}},
+        }
+    }
+    paths["/plugins/1.0/"] = {
+        "get": {
+            "operationId": "getInstalledPlugins",
+            "parameters": [],
             "responses": {"200": {"description": "OK"}},
         }
     }
@@ -254,6 +265,10 @@ class JiraClient:
         Raises JiraError on non-404 HTTP errors.
         """
         return await extraction.server_version(self)
+
+    def installed_apps(self, start_at: int = 0) -> AsyncIterator[extraction.Batch]:
+        """Yield detected user-installed apps; ``start_at`` 1 means done."""
+        return extraction.installed_apps(self, start_at)
 
     def custom_fields(
         self, field_ids: list[str], start_at: int = 0

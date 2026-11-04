@@ -12,7 +12,7 @@ A database dump is a complete copy of everything Jira stores: configuration, iss
 
 **You may not be able to get a dump.** Producing one usually needs access to the database host or the people who run it. The export needs only a Jira account that can read the configuration, which is the access a migration analyst is most likely to have.
 
-**It stays inside what Jira supports.** The client only issues `GET` requests, so a run cannot change Jira. It also reads through documented operations, so the records mean what Jira's API says they mean, rather than what an analyst infers from a table. The exception is one internal route, used for view screens, which is marked `"api": "internal"` in the output so you know it carries more risk of changing.
+**It stays inside what Jira supports.** The client only issues `GET` requests, so a run cannot change Jira. It also reads through documented operations, so the records mean what Jira's API says they mean, rather than what an analyst infers from a table. The exceptions are two internal, undocumented routes: one for view screens and one for the installed-app inventory (UPM). Both are marked `"api": "internal"` in the output so you know they carry more risk of changing.
 
 **The output is shaped for analysis, not restoration.** Every line is a self-contained JSON record with a source system, entity, ID, endpoint, and extraction time. Related records join on stable IDs. Each record also keeps the complete source response under `raw` — or both responses, when one record joins two — so nothing Jira returned is thrown away. A dump has to be loaded into a database of the right version before you can query it.
 
@@ -22,7 +22,7 @@ The export is also restartable. A large instance can take a long time at a polit
 
 ## What you give up
 
-The export cannot see what Jira does not publish. At the time of writing it does not collect field contexts, field configurations (hidden and required settings), screen schemes, or issue type screen schemes, because no read route for them was found. It does not collect app configuration either: Elements Connect, ScriptRunner, and Dynamic Forms each document an administration-screen export, not a configuration API. A database dump would contain much of this.
+The export cannot see what Jira does not publish. At the time of writing it does not collect field contexts, field configurations (hidden and required settings), screen schemes, or issue type screen schemes, because no read route for them was found. It does not collect app configuration either: Elements Connect, ScriptRunner, and Dynamic Forms each document an administration-screen export, not a configuration API. It does record detected user-installed app versions and field-to-app type-key links, but not the apps' configuration. A database dump would contain much of this.
 
 So the two are complements. Use the export to build a readable, provenance-tracked inventory of the configuration Jira exposes, and to find out which questions the API can answer. Reach for a dump, or for an app's own export from its admin screen, when a question depends on data in the gaps the manifest reports. See the [CLI reference](../reference/cli.md) for how the coverage statuses appear.
 

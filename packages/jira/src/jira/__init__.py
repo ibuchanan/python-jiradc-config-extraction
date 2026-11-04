@@ -2,7 +2,13 @@
 
 from .client import DEFAULT_REQUESTS_PER_MINUTE, JiraClient, SpacingRateLimiter
 from .errors import JiraError, describe_exception
-from .extraction import Batch, IssueTypeScreenTarget, ProjectRef, ScreenTab
+from .extraction import (
+    Batch,
+    IssueTypeScreenTarget,
+    ProjectRef,
+    ScreenTab,
+    field_app_associations,
+)
 from .status import StageStatus
 
 __all__ = [
@@ -16,4 +22,5 @@ __all__ = [
     "JiraError",
     "StageStatus",
     "describe_exception",
+    "field_app_associations",
 ]

@@ -20,4 +20,6 @@ asyncio.run(main())
 
 The client uses `user=` and `password=` for HTTP Basic authentication. It rate-limits requests by default and retries HTTP 429 responses up to a bounded number of attempts. Keep credentials out of source control; pass them from a secure runtime source.
 
+The client declares two routes that are not in the bundled OpenAPI document: the internal project-settings route used for view screens, and the UPM route `/rest/plugins/1.0/` used only to read installed app versions. Coverage marks both `"api": "internal"`.
+
 For the export command, see [cli](../cli/README.md).

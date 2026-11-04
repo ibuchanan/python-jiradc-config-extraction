@@ -7,7 +7,12 @@ from typing import Any
 import httpx
 import pytest
 
-from jira import JiraClient, JiraError, describe_exception
+from jira import (
+    JiraClient,
+    JiraError,
+    describe_exception,
+    field_app_associations,
+)
 
 
 @pytest.mark.anyio
@@ -83,6 +88,52 @@ async def test_transport_failure_reports_safe_cause_chain() -> None:
     assert "s3cret" not in caught.value.detail
 
 
+def test_field_app_associations_match_exact_app_keys_only() -> None:
+    field = {
+        "source": {
+            "system": "jira",
+            "entity": "field",
+            "id": "customfield_1",
+            "endpoint": "/rest/api/2/field",
+        },
+        "raw": {
+            "id": "customfield_1",
+            "schema": {"custom": "com.example.app:type", "type": "string"},
+        },
+    }
+    app = {
+        "source": {
+            "system": "jira",
+            "entity": "app",
+            "id": "com.example.app",
+            "endpoint": "/rest/plugins/1.0/",
+        },
+        "app": {"name": "Example App", "version": "1.2.3"},
+        "raw": {"key": "com.example.app", "license": "kept"},
+    }
+
+    records = field_app_associations([field], [app])
+
+    assert [record["source"]["id"] for record in records] == [
+        "customfield_1:com.example.app"
+    ]
+    assert records[0]["raw"] == {"field": field["raw"], "app": app["raw"]}
+    assert records[0]["evidence"] == {
+        "field_type_key": "com.example.app:type",
+        "app_key": "com.example.app",
+        "app_endpoint": "/rest/plugins/1.0/",
+        "match": "field schema.custom prefix equals installed app key",
+    }
+    assert field_app_associations([field], []) == []
+    assert (
+        field_app_associations(
+            [{"source": {"id": "x"}, "raw": {"schema": {"custom": "other:type"}}}],
+            [app],
+        )
+        == []
+    )
+
+
 def test_describe_exception_includes_os_message_but_not_other_messages() -> None:
     os_error = OSError("[Errno 8] nodename nor servname provided")
     wrapped = RuntimeError("body said password=hunter2")
@@ -116,6 +167,58 @@ async def test_field_inventory_accepts_compressed_responses() -> None:
         records = await client.field_inventory()
 
     assert [record["source"]["id"] for record in records] == ["customfield_1"]
+
+
+@pytest.mark.anyio
+async def test_installed_apps_records_user_installed_plugins_with_full_raw() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "plugins": [
+                    {
+                        "key": "com.example.app",
+                        "name": "Example App",
+                        "version": "1.2.3",
+                        "userInstalled": True,
+                        "sentinel": "kept",
+                    },
+                    {
+                        "key": "com.atlassian.jira",
+                        "name": "Jira Core",
+                        "version": "11.3.12",
+                        "userInstalled": False,
+                    },
+                    {"key": "no-version", "name": "No Version", "userInstalled": True},
+                ],
+                "total": 3,
+            },
+        )
+
+    async with JiraClient(
+        "https://jira.example.com/jira",
+        user="admin",
+        password="s3cret",  # noqa: S106
+        requests_per_minute=60_000,
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        records: list[dict[str, Any]] = [
+            record
+            async for batch in client.installed_apps()
+            for record in batch.records
+        ]
+
+    assert [record["source"]["id"] for record in records] == [
+        "com.example.app",
+        "no-version",
+    ]
+    assert records[0]["raw"]["sentinel"] == "kept"
+    assert records[0]["app"]["version"] == "1.2.3"
+    assert records[1]["app"]["version"] is None
+    assert requests[0].url.path == "/jira/rest/plugins/1.0/"
 
 
 @pytest.mark.anyio

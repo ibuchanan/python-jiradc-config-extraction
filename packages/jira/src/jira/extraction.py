@@ -511,6 +511,125 @@ def _numeric_order(identifier: str) -> tuple[int, str]:
     return (len(identifier), identifier)
 
 
+async def installed_apps(client: JiraClient, start_at: int = 0) -> AsyncIterator[Batch]:
+    """Yield detected user-installed apps and their versions (one batch).
+
+    The UPM REST module at ``/rest/plugins/1.0/`` is not part of the documented
+    Jira REST API, so this inventory is optional evidence, not configuration.
+    Only user-installed plugins with a stable key are recorded. ``start_at`` of 1
+    means the batch was already committed. Raises JiraError on validation or HTTP
+    errors.
+    """
+    if start_at >= 1:
+        return
+    endpoint = "/rest/plugins/1.0/"
+    async with _jira_errors():
+        response = await client.call("getInstalledPlugins")
+        payload = response.json()
+        plugins = (
+            _require_list(payload.get("plugins"), "Invalid plugins response")
+            if isinstance(payload, dict)
+            else _require_list(payload, "Invalid plugins response")
+        )
+
+        by_id: dict[str, dict[str, object]] = {}
+        for plugin in plugins:
+            if not isinstance(plugin, dict) or plugin.get("userInstalled") is not True:
+                continue
+            identifier = _identifier(plugin.get("key"))
+            if identifier is None:
+                continue
+            version = plugin.get("version")
+            vendor = plugin.get("vendor")
+            _keep_first(
+                by_id,
+                identifier,
+                _record(
+                    "app",
+                    identifier,
+                    endpoint,
+                    raw=plugin,
+                    app={
+                        "key": identifier,
+                        "name": plugin.get("name"),
+                        "version": (
+                            version if isinstance(version, str) and version else None
+                        ),
+                        "vendor": (
+                            vendor.get("name") if isinstance(vendor, dict) else None
+                        ),
+                        "enabled": plugin.get("enabled"),
+                        "user_installed": True,
+                    },
+                ),
+            )
+
+        yield Batch([by_id[key] for key in sorted(by_id)], 1)
+
+
+def field_app_associations(
+    fields: list[dict[str, Any]], apps: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Link custom fields to detected apps by exact field-type-key prefix.
+
+    A custom field's ``schema.custom`` value is ``<plugin key>:<type>``. When the
+    prefix exactly equals a detected user-installed app key, the complete field
+    and app responses are kept together as evidence. No association is inferred
+    from a field name, and no app configuration is claimed.
+    """
+    apps_by_key: dict[str, dict[str, Any]] = {}
+    for app in apps:
+        source = app.get("source")
+        if isinstance(source, dict) and isinstance(source.get("id"), str):
+            apps_by_key[source["id"]] = app
+
+    records: list[dict[str, Any]] = []
+    for field in fields:
+        source = field.get("source")
+        raw = field.get("raw")
+        if not isinstance(source, dict) or not isinstance(raw, dict):
+            continue
+        schema = raw.get("schema")
+        if not isinstance(schema, dict):
+            continue
+        custom = schema.get("custom")
+        if not isinstance(custom, str) or ":" not in custom:
+            continue
+
+        field_id = _identifier(source.get("id"))
+        app_key = custom.split(":", 1)[0]
+        app = apps_by_key.get(app_key)
+        if field_id is None or app is None:
+            continue
+        app_view = app.get("app")
+        app_source = app.get("source")
+        if not isinstance(app_view, dict) or not isinstance(app_source, dict):
+            continue
+
+        records.append(
+            _record(
+                "field_app_association",
+                f"{field_id}:{app_key}",
+                str(source.get("endpoint")),
+                raw={"field": raw, "app": app.get("raw")},
+                field_id=field_id,
+                app_key=app_key,
+                app={
+                    "name": app_view.get("name"),
+                    "version": app_view.get("version"),
+                },
+                evidence={
+                    "field_type_key": custom,
+                    "app_key": app_key,
+                    "app_endpoint": app_source.get("endpoint"),
+                    "match": "field schema.custom prefix equals installed app key",
+                },
+            )
+        )
+
+    return sorted(records, key=lambda record: str(record["source"]["id"]))
+
+
 async def projects(client: JiraClient, start_at: int = 0) -> AsyncIterator[Batch]:
     """Yield the project inventory (one request, so a single batch).
 

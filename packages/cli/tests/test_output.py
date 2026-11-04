@@ -93,9 +93,9 @@ def test_rerun_after_failure_describes_resume_and_skips_finished_stages(
     out = capsys.readouterr().out
     assert "Resuming run" in out
     assert (
-        "complete: fields, custom_fields, custom_field_options, projects, "
-        "issue_types, issue_type_schemes, project_workflow_schemes, "
-        "project_issue_type_view_screens, screens"
+        "complete: fields, custom_fields, custom_field_options, app_inventory, "
+        "associations, projects, issue_types, issue_type_schemes, "
+        "project_workflow_schemes, project_issue_type_view_screens, screens"
     ) in out
     assert "partial:  screen_tab_fields (2 records kept; continues at unit 2)" in out
     assert "Skipping fields: already complete (3 records)" in out

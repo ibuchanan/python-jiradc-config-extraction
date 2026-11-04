@@ -57,7 +57,7 @@ Each package keeps its tests in `tests/`. `pytest` is configured at the root to 
 ## Things to know
 
 - **Request pacing** is the `REQUESTS_PER_MINUTE` constant (120) near the top of `packages/cli/src/cli/main.py`.
-- **Resume safety:** a stage appends whole lines, flushes and `fsync`s, and only then records `{cursor, offset, count}` in `checkpoint.json`. Don't write stage files any other way. The details are in [packages/cli/README.md](packages/cli/README.md).
+- **Resume safety:** a stage appends whole lines, flushes and `fsync`s, and only then records `{cursor, offset, count}` in `checkpoint.json`. Don't write stage files any other way. The one exception is the single-request `fields` stage: it atomically replaces `fields.jsonl` and records `{status, count}` rather than a resume cursor, as `Stage.extract` documents in `packages/cli/src/cli/main.py`. The details are in [packages/cli/README.md](packages/cli/README.md).
 - **Internal Jira APIs:** the view-screen stage uses `/rest/projectconfig/1/...`, and the app-inventory stage uses the UPM module `/rest/plugins/1.0/`. Neither is documented, and both are marked `"api": "internal"` in the output.
 - **Don't guess endpoints** for apps with no documented read API (Elements Connect, ScriptRunner, Dynamic Forms). Report them as `unsupported`; see [specs/plugin-api-references.md](specs/plugin-api-references.md). The UPM inventory records installed app versions and field-to-app type-key evidence, not app configuration.
 - **The OpenAPI file** is Data Center, not Cloud. Don't replace it with the Cloud document; see [packages/jira/openapi/README.md](packages/jira/openapi/README.md).

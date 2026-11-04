@@ -7,7 +7,13 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 
-from jira import JiraClient, ScreenTab, field_app_associations
+from jira import (
+    AppEvidence,
+    FieldEvidence,
+    JiraClient,
+    ScreenTab,
+    field_app_associations,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -19,7 +25,7 @@ def _client(handler: Callable[[httpx.Request], httpx.Response]) -> JiraClient:
     return JiraClient(
         "https://jira.example.com/jira",
         user="admin",
-        password="s3cret",  # noqa: S106
+        password="s3cret",
         requests_per_minute=60_000,
         transport=httpx.MockTransport(handler),
     )
@@ -125,17 +131,20 @@ async def test_screen_tab_fields_keep_jira_response_order() -> None:
 
 
 def test_associations_are_sorted_by_source_id() -> None:
-    def field(identifier: str) -> dict[str, Any]:
-        return {
-            "source": {"id": identifier, "endpoint": "/rest/api/2/field"},
-            "raw": {"schema": {"custom": "com.example.app:type"}},
-        }
+    def field(identifier: str) -> FieldEvidence:
+        return FieldEvidence(
+            identifier,
+            "/rest/api/2/field",
+            {"schema": {"custom": "com.example.app:type"}},
+        )
 
-    app = {
-        "source": {"id": "com.example.app", "endpoint": "/rest/plugins/1.0/"},
-        "app": {"name": "Example", "version": "1.0"},
-        "raw": {"key": "com.example.app"},
-    }
+    app = AppEvidence(
+        "com.example.app",
+        "/rest/plugins/1.0/",
+        "Example",
+        "1.0",
+        {"key": "com.example.app"},
+    )
 
     records = field_app_associations(
         [field("customfield_2"), field("customfield_1")], [app]

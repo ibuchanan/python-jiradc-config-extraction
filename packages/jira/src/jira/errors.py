@@ -62,10 +62,6 @@ class JiraError(Exception):
         self.stage_status = StageStatus(stage_status)
         self.detail = detail
 
-    def __str__(self) -> str:
-        """Return error message without response data or credentials."""
-        return super().__str__()
-
     def __repr__(self) -> str:
         """Return safe repr without response data."""
         return (

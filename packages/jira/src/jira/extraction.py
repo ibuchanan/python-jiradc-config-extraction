@@ -64,6 +64,26 @@ class IssueTypeScreenTarget:
     issue_type_id: str
 
 
+@dataclass(frozen=True)
+class FieldEvidence:
+    """A field's source ID, endpoint, and complete response."""
+
+    field_id: str
+    endpoint: str
+    raw: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AppEvidence:
+    """An installed app's source ID, endpoint, view, and complete response."""
+
+    key: str
+    endpoint: str
+    name: str | None
+    version: str | None
+    raw: dict[str, Any]
+
+
 def _record(
     entity: str, identifier: str, endpoint: str, **data: object
 ) -> dict[str, object]:
@@ -569,7 +589,7 @@ async def installed_apps(client: JiraClient, start_at: int = 0) -> AsyncIterator
 
 
 def field_app_associations(
-    fields: list[dict[str, Any]], apps: list[dict[str, Any]]
+    fields: list[FieldEvidence], apps: list[AppEvidence]
 ) -> list[dict[str, Any]]:
     """Link custom fields to detected apps by exact field-type-key prefix.
 
@@ -578,51 +598,34 @@ def field_app_associations(
     and app responses are kept together as evidence. No association is inferred
     from a field name, and no app configuration is claimed.
     """
-    apps_by_key: dict[str, dict[str, Any]] = {}
-    for app in apps:
-        source = app.get("source")
-        if isinstance(source, dict) and isinstance(source.get("id"), str):
-            apps_by_key[source["id"]] = app
-
+    apps_by_key = {app.key: app for app in apps}
     records: list[dict[str, Any]] = []
     for field in fields:
-        source = field.get("source")
-        raw = field.get("raw")
-        if not isinstance(source, dict) or not isinstance(raw, dict):
-            continue
-        schema = raw.get("schema")
+        schema = field.raw.get("schema")
         if not isinstance(schema, dict):
             continue
         custom = schema.get("custom")
         if not isinstance(custom, str) or ":" not in custom:
             continue
 
-        field_id = _identifier(source.get("id"))
         app_key = custom.split(":", 1)[0]
         app = apps_by_key.get(app_key)
-        if field_id is None or app is None:
-            continue
-        app_view = app.get("app")
-        app_source = app.get("source")
-        if not isinstance(app_view, dict) or not isinstance(app_source, dict):
+        if app is None:
             continue
 
         records.append(
             _record(
                 "field_app_association",
-                f"{field_id}:{app_key}",
-                str(source.get("endpoint")),
-                raw={"field": raw, "app": app.get("raw")},
-                field_id=field_id,
+                f"{field.field_id}:{app_key}",
+                field.endpoint,
+                raw={"field": field.raw, "app": app.raw},
+                field_id=field.field_id,
                 app_key=app_key,
-                app={
-                    "name": app_view.get("name"),
-                    "version": app_view.get("version"),
-                },
+                app={"name": app.name, "version": app.version},
                 evidence={
                     "field_type_key": custom,
                     "app_key": app_key,
-                    "app_endpoint": app_source.get("endpoint"),
+                    "app_endpoint": app.endpoint,
                     "match": "field schema.custom prefix equals installed app key",
                 },
             )

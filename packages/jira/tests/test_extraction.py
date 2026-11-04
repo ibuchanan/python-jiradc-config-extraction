@@ -10,6 +10,8 @@ import httpx
 import pytest
 
 from jira import (
+    AppEvidence,
+    FieldEvidence,
     JiraClient,
     JiraError,
     describe_exception,
@@ -78,7 +80,7 @@ async def test_transport_failure_reports_safe_cause_chain() -> None:
     async with JiraClient(
         "https://jira.example.com/jira",
         user="admin",
-        password="s3cret",  # noqa: S106
+        password="s3cret",
         transport=httpx.MockTransport(handler),
     ) as client:
         with pytest.raises(JiraError) as caught:
@@ -91,35 +93,28 @@ async def test_transport_failure_reports_safe_cause_chain() -> None:
 
 
 def test_field_app_associations_match_exact_app_keys_only() -> None:
-    field = {
-        "source": {
-            "system": "jira",
-            "entity": "field",
-            "id": "customfield_1",
-            "endpoint": "/rest/api/2/field",
-        },
-        "raw": {
+    field = FieldEvidence(
+        "customfield_1",
+        "/rest/api/2/field",
+        {
             "id": "customfield_1",
             "schema": {"custom": "com.example.app:type", "type": "string"},
         },
-    }
-    app = {
-        "source": {
-            "system": "jira",
-            "entity": "app",
-            "id": "com.example.app",
-            "endpoint": "/rest/plugins/1.0/",
-        },
-        "app": {"name": "Example App", "version": "1.2.3"},
-        "raw": {"key": "com.example.app", "license": "kept"},
-    }
+    )
+    app = AppEvidence(
+        "com.example.app",
+        "/rest/plugins/1.0/",
+        "Example App",
+        "1.2.3",
+        {"key": "com.example.app", "license": "kept"},
+    )
 
     records = field_app_associations([field], [app])
 
     assert [record["source"]["id"] for record in records] == [
         "customfield_1:com.example.app"
     ]
-    assert records[0]["raw"] == {"field": field["raw"], "app": app["raw"]}
+    assert records[0]["raw"] == {"field": field.raw, "app": app.raw}
     assert records[0]["evidence"] == {
         "field_type_key": "com.example.app:type",
         "app_key": "com.example.app",
@@ -129,7 +124,13 @@ def test_field_app_associations_match_exact_app_keys_only() -> None:
     assert field_app_associations([field], []) == []
     assert (
         field_app_associations(
-            [{"source": {"id": "x"}, "raw": {"schema": {"custom": "other:type"}}}],
+            [
+                FieldEvidence(
+                    "customfield_2",
+                    "/rest/api/2/field",
+                    {"schema": {"custom": "other:type"}},
+                )
+            ],
             [app],
         )
         == []
@@ -162,7 +163,7 @@ async def test_field_inventory_accepts_compressed_responses() -> None:
     async with JiraClient(
         "https://jira.example.com/jira",
         user="admin",
-        password="s3cret",  # noqa: S106
+        password="s3cret",
         requests_per_minute=60_000,
         transport=httpx.MockTransport(handler),
     ) as client:
@@ -203,7 +204,7 @@ async def test_installed_apps_records_user_installed_plugins_with_full_raw() -> 
     async with JiraClient(
         "https://jira.example.com/jira",
         user="admin",
-        password="s3cret",  # noqa: S106
+        password="s3cret",
         requests_per_minute=60_000,
         transport=httpx.MockTransport(handler),
     ) as client:
@@ -231,7 +232,7 @@ async def test_malformed_screens_page_reports_which_validation_failed() -> None:
     async with JiraClient(
         "https://jira.example.com/jira",
         user="admin",
-        password="s3cret",  # noqa: S106
+        password="s3cret",
         requests_per_minute=60_000,
         transport=httpx.MockTransport(handler),
     ) as client:
@@ -253,7 +254,7 @@ async def test_plain_text_error_body_reports_http_status() -> None:
     async with JiraClient(
         "https://jira.example.com/jira",
         user="admin",
-        password="s3cret",  # noqa: S106
+        password="s3cret",
         requests_per_minute=60_000,
         transport=httpx.MockTransport(handler),
     ) as client:
@@ -283,7 +284,7 @@ async def test_screens_sends_both_paging_parameters_and_reads_screens_key() -> N
     async with JiraClient(
         "https://jira.example.com/jira",
         user="admin",
-        password="s3cret",  # noqa: S106
+        password="s3cret",
         requests_per_minute=60_000,
         transport=httpx.MockTransport(handler),
     ) as client:
@@ -314,7 +315,7 @@ async def test_screens_keep_first_repeated_source_id_in_a_page() -> None:
     async with JiraClient(
         "https://jira.example.com/jira",
         user="admin",
-        password="s3cret",  # noqa: S106
+        password="s3cret",
         requests_per_minute=60_000,
         transport=httpx.MockTransport(handler),
     ) as client:

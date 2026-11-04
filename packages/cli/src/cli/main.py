@@ -25,7 +25,9 @@ from cli.doctor import run_checks
 from cli.stage_file import StageFile
 from config import load_jira_dc_settings, normalise_url, url_origin
 from jira import (
+    AppEvidence,
     Batch,
+    FieldEvidence,
     IssueTypeScreenTarget,
     JiraClient,
     JiraError,
@@ -230,16 +232,61 @@ def _app_inventory(
     return client.installed_apps(start)
 
 
+def _field_evidence(records: list[dict[str, Any]]) -> list[FieldEvidence]:
+    """Select the field ID, endpoint, and response the association rule reads."""
+    evidence: list[FieldEvidence] = []
+    for record in records:
+        source = record.get("source")
+        raw = record.get("raw")
+        if not (isinstance(source, dict) and isinstance(raw, dict)):
+            continue
+        field_id = source.get("id")
+        endpoint = source.get("endpoint")
+        if isinstance(field_id, str) and isinstance(endpoint, str):
+            evidence.append(FieldEvidence(field_id, endpoint, raw))
+    return evidence
+
+
+def _app_evidence(records: list[dict[str, Any]]) -> list[AppEvidence]:
+    """Select the app ID, endpoint, view, and response the rule reads."""
+    evidence: list[AppEvidence] = []
+    for record in records:
+        source = record.get("source")
+        app = record.get("app")
+        raw = record.get("raw")
+        if not (
+            isinstance(source, dict) and isinstance(app, dict) and isinstance(raw, dict)
+        ):
+            continue
+        key = source.get("id")
+        endpoint = source.get("endpoint")
+        if not (isinstance(key, str) and isinstance(endpoint, str)):
+            continue
+        name = app.get("name")
+        version = app.get("version")
+        evidence.append(
+            AppEvidence(
+                key,
+                endpoint,
+                name if isinstance(name, str) else None,
+                version if isinstance(version, str) else None,
+                raw,
+            )
+        )
+    return evidence
+
+
 async def _field_app_associations(
     _client: JiraClient, output_dir: Path, start: int
 ) -> AsyncIterator[Batch]:
     """Link fields to detected apps; one derived batch, no Jira request."""
     if start >= 1:
         return
+    field_records = _read_jsonl(output_dir / _STAGES_BY_NAME["fields"].filename)
+    app_records = _read_jsonl(output_dir / _STAGES_BY_NAME["app_inventory"].filename)
     yield Batch(
         field_app_associations(
-            _read_jsonl(output_dir / _STAGES_BY_NAME["fields"].filename),
-            _read_jsonl(output_dir / _STAGES_BY_NAME["app_inventory"].filename),
+            _field_evidence(field_records), _app_evidence(app_records)
         ),
         1,
     )
@@ -914,7 +961,7 @@ def export(
     ] = None,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Log debug details to stderr.")
-    ] = False,  # noqa: FBT002
+    ] = False,
 ) -> None:
     """Export Jira Data Center configuration to OUTPUT_DIR."""
     _configure_logging(verbose=verbose)

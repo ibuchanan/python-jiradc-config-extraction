@@ -19,7 +19,7 @@ def _client(handler: Callable[[httpx.Request], httpx.Response]) -> JiraClient:
     return JiraClient(
         "https://jira.example.com/jira",
         user="admin",
-        password="s3cret",  # noqa: S106
+        password="s3cret",
         requests_per_minute=60_000,
         transport=httpx.MockTransport(handler),
     )

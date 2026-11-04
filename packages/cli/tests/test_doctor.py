@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from _pytest.capture import CaptureFixture
     from _pytest.monkeypatch import MonkeyPatch
 
-PASSWORD = "private-password"  # noqa: S105
+PASSWORD = "private-password"
 
 
 def _settings(url: str = "https://jira.example.com/jira") -> Any:  # noqa: ANN401

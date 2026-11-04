@@ -3,7 +3,9 @@
 from .client import DEFAULT_REQUESTS_PER_MINUTE, JiraClient, SpacingRateLimiter
 from .errors import JiraError, describe_exception
 from .extraction import (
+    AppEvidence,
     Batch,
+    FieldEvidence,
     IssueTypeScreenTarget,
     ProjectRef,
     ScreenTab,
@@ -13,8 +15,10 @@ from .extraction import (
 from .status import StageStatus
 
 __all__ = [
+    "AppEvidence",
     "Batch",
     "DEFAULT_REQUESTS_PER_MINUTE",
+    "FieldEvidence",
     "IssueTypeScreenTarget",
     "JiraClient",
     "ProjectRef",

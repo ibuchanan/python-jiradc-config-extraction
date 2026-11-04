@@ -179,7 +179,7 @@ def _source_ids(path: Path) -> list[str]:
 
 def _field_ids(output_dir: Path) -> list[str]:
     """Read the custom field IDs written by the fields stage."""
-    return _source_ids(output_dir / "fields.jsonl")
+    return _source_ids(output_dir / _STAGES_BY_NAME["fields"].filename)
 
 
 def _app_versions(output_dir: Path) -> dict[str, str]:
@@ -201,14 +201,14 @@ def _app_versions(output_dir: Path) -> dict[str, str]:
 
 def _screen_ids(output_dir: Path) -> list[str]:
     """Read the screen IDs written by the screens stage."""
-    return _source_ids(output_dir / "screens.jsonl")
+    return _source_ids(output_dir / _STAGES_BY_NAME["screens"].filename)
 
 
 def _tabs(output_dir: Path) -> list[ScreenTab]:
     """Read the screen and tab IDs written by the tabs stage."""
     return [
         ScreenTab(record["screen_id"], record["source"]["id"].split(":", 1)[1])
-        for record in _read_jsonl(output_dir / "screen-tabs.jsonl")
+        for record in _read_jsonl(output_dir / _STAGES_BY_NAME["screen_tabs"].filename)
     ]
 
 
@@ -268,7 +268,7 @@ def _project_workflow_schemes(
 ) -> AsyncIterator[Batch]:
     projects = [
         ProjectRef(record["source"]["id"], record["project"]["key"])
-        for record in _read_jsonl(output_dir / "projects.jsonl")
+        for record in _read_jsonl(output_dir / _STAGES_BY_NAME["projects"].filename)
     ]
     return client.project_workflow_schemes(projects, start)
 
@@ -276,14 +276,16 @@ def _project_workflow_schemes(
 def _issue_type_screen_targets(output_dir: Path) -> list[IssueTypeScreenTarget]:
     """Pair each project with the issue types its issue type scheme offers."""
     issue_types_by_project: dict[str, set[str]] = {}
-    for record in _read_jsonl(output_dir / "issue-type-schemes.jsonl"):
+    for record in _read_jsonl(
+        output_dir / _STAGES_BY_NAME["issue_type_schemes"].filename
+    ):
         scheme = record["issue_type_scheme"]
         for project_id in scheme["project_ids"]:
             issue_types_by_project.setdefault(project_id, set()).update(
                 scheme["issue_type_ids"]
             )
     targets: list[IssueTypeScreenTarget] = []
-    for record in _read_jsonl(output_dir / "projects.jsonl"):
+    for record in _read_jsonl(output_dir / _STAGES_BY_NAME["projects"].filename):
         project = ProjectRef(record["source"]["id"], record["project"]["key"])
         if project.project_id not in issue_types_by_project:
             message = "Project is not in any issue type scheme"

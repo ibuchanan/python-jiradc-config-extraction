@@ -185,7 +185,7 @@ The exporter reads `GET /rest/projectconfig/1/issuetype/{projectKey}/{issueTypeI
 
 ### 14.3 Connection-check command
 
-`doctor` is an additional read-only diagnostic command. URL, DNS, TCP, TLS, proxy, and credential failures are common and otherwise surface as an export failure; `doctor` reports which check failed, stops at the first failure, exits nonzero on `fail`, and never writes export files. `export` reuses the same checks as a preflight before it touches the output directory.
+`doctor` is an additional read-only diagnostic command. URL, DNS, TCP, TLS, proxy, and credential failures are common and otherwise surface as an export failure; `doctor` reports which check failed, stops the connection checks at the first failure, still reports the proxy advisory, exits nonzero on `fail`, and never writes export files. `export` reuses the same checks as a preflight before it touches the output directory.
 
 ### 14.4 Terminal progress and request pacing
 

@@ -185,3 +185,27 @@ def test_declared_gap_coverage_matches_cli_reference() -> None:
     for gap in cli._DECLARED_GAPS:
         assert gap.reason in section
         assert gap.evidence in section
+
+
+def test_fatal_configuration_export_error_still_prints_summary(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capsys: CaptureFixture[str],
+    jira_basic_auth_fixture: FixtureSetup,
+) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/field"):
+            return httpx.Response(200, json=[])
+        raise AssertionError(request.url.path)
+
+    jira_basic_auth_fixture("https://jira.example.com", respond)
+
+    async def fail(*_args: object, **_kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cli, "export_configuration", fail)
+
+    assert cli.main(["export", "export"]) == 1
+    output = capsys.readouterr().out
+    assert "Coverage summary" in output
+    assert re.search(r"(?m)^fields\s+complete \(0 records, not found\)\s*$", output)

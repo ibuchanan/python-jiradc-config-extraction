@@ -12,7 +12,7 @@ jira-config-export doctor
 
 Checks the Jira connection. Takes no options. Reads credentials as described in [Provide Jira credentials](../how-to/provide-credentials.md).
 
-Checks run in this order. The first failure stops the sequence; later checks report `skip`.
+Checks run in this order. The first failure stops the remaining connection checks, which report `skip`; the `proxy` advisory is always reported.
 
 | Check | Verifies |
 | --- | --- |

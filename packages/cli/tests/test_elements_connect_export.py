@@ -86,7 +86,6 @@ def test_cli_reports_elements_connect_config_as_a_gap_without_guessing_api(
     assert coverage["associations"] == {
         "status": "complete",
         "count": 0,
-        "api": "internal",
     }
     assert not (tmp_path / "export" / "elements-connect.jsonl").exists()
     assert (tmp_path / "export" / "associations.jsonl").read_text() == ""
@@ -159,7 +158,6 @@ def test_cli_links_elements_connect_field_to_detected_app_with_full_raw_objects(
     assert manifest["coverage"]["associations"] == {
         "status": "complete",
         "count": 1,
-        "api": "internal",
     }
     gap = manifest["coverage"]["elements_connect"]
     assert gap["status"] == "unsupported"

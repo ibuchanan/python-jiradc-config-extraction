@@ -1,8 +1,9 @@
 """Diagnose configuration and connectivity to Jira Data Center.
 
-Each check builds on the previous one, so the first failure skips the rest and
-names the layer that broke: config, URL, DNS, TCP, HTTP/TLS, or authentication.
-Detail text never includes the password or response bodies.
+Each connection check builds on the previous one, so the first failure skips the
+rest and names the layer that broke: config, URL, DNS, TCP, HTTP/TLS, or
+authentication. The proxy advisory always runs. Detail text never includes the
+password or response bodies.
 """
 
 from __future__ import annotations

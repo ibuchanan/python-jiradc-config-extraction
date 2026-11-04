@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -12,6 +13,7 @@ from cli import main as cli
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from _pytest.capture import CaptureFixture
     from conftest import FixtureSetup
 
 
@@ -20,7 +22,9 @@ def _lines(path: Path) -> list[dict[str, Any]]:
 
 
 def test_tab_fields_resume_from_the_failed_tab(
-    tmp_path: Path, jira_basic_auth_fixture: FixtureSetup
+    tmp_path: Path,
+    jira_basic_auth_fixture: FixtureSetup,
+    capsys: CaptureFixture[str],
 ) -> None:
     tab_field_requests: list[str] = []
     fail_tab_six = True
@@ -52,6 +56,10 @@ def test_tab_fields_resume_from_the_failed_tab(
     export = tmp_path / "export"
 
     assert cli.main(["export", "export"]) == 1
+    assert re.search(
+        r"(?m)^screen_tab_fields\s+failed \(1 records written\)\s*$",
+        capsys.readouterr().out,
+    )
 
     tab_fields = export / "screen-tab-fields.jsonl"
     assert [row["source"]["id"] for row in _lines(tab_fields)] == ["10:5:field_5"]

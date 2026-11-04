@@ -391,7 +391,6 @@ STAGES: tuple[Stage, ...] = (
         "associations.jsonl",
         _field_app_associations,
         prerequisites=("app_inventory",),
-        internal_api=True,
         advisory=True,
     ),
     Stage("projects", "projects.jsonl", _projects),
@@ -845,15 +844,16 @@ def _print_summary(output_dir: Path, *, fields_failed: bool = False) -> bool:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     coverage = manifest["coverage"]
     queried = tuple(stage.name for stage in _RESUMABLE_STAGES)
-    if fields_failed:
-        for stage in queried:
-            coverage.setdefault(
-                stage,
-                {
-                    "status": StageStatus.NOT_QUERIED,
-                    "reason": "fields incomplete",
-                },
-            )
+    reason = (
+        "fields incomplete" if fields_failed else "export stopped before this stage"
+    )
+    missing = [stage for stage in queried if stage not in coverage]
+    for stage in missing:
+        coverage[stage] = {
+            "status": StageStatus.NOT_QUERIED,
+            "reason": reason,
+        }
+    if missing:
         _save_json(manifest_path, manifest)
     advisory = {stage.name for stage in _RESUMABLE_STAGES if stage.advisory}
     table = Table(title="Coverage summary", box=None, pad_edge=False)
@@ -861,13 +861,14 @@ def _print_summary(output_dir: Path, *, fields_failed: bool = False) -> bool:
     table.add_column("Status")
     for stage, result in sorted(coverage.items()):
         status = StageStatus(result["status"])
-        suffix = (
-            f" ({result['count']} records"
-            + (", not found" if result["count"] == 0 else "")
-            + ")"
-            if status is StageStatus.COMPLETE
-            else ""
-        )
+        suffix = ""
+        if status is StageStatus.COMPLETE:
+            not_found = ", not found" if result["count"] == 0 else ""
+            suffix = f" ({result['count']} records{not_found})"
+        elif status is StageStatus.FAILED:
+            written = result.get("records_written")
+            if isinstance(written, int):
+                suffix = f" ({written} records written)"
         style = (
             "green"
             if status is StageStatus.COMPLETE
@@ -941,6 +942,7 @@ def _run_export(output_dir: Path, *, url: str | None = None) -> int:
         error_console.print(
             f"[red]Jira configuration export failed ({_error_text(exc)})[/red]"
         )
+        _print_summary(output_dir)
         return 1
     return int(_print_summary(output_dir))
 

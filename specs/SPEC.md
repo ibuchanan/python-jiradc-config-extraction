@@ -148,7 +148,7 @@ Exact command names/options are implementation design decisions, but the initial
 
 ## 11. Acceptance criteria for an initial implementation
 
-- A fixture-driven test demonstrates extraction and normalized records for representative custom fields, contexts, screens, tabs, and placements.
+- A fixture-driven test demonstrates extraction and normalized records for representative custom fields, screens, tabs, and placements. Field contexts are not extracted; the `field_contexts` declared gap in section 14.5 records why, and no fixture claims context records.
 - A fixture-driven test demonstrates an Elements Connect field linked by exact field-type-key evidence to a detected installed app record, preserving source endpoint, source ID, extraction time, and the complete raw field and app objects. No app configuration is fabricated; the configuration gap is reported with evidence.
 - Installed app versions are recorded where UPM exposes them; unavailable or versionless apps remain absent and are not guessed.
 - Dynamic Forms and ScriptRunner being unavailable or unauthorized is represented as an explicit coverage gap, not as “no configuration found.”
@@ -181,7 +181,7 @@ Non-goals exclude extracting all Jira configuration, including workflows. The ex
 
 ### 14.2 Internal project-config API for view screens
 
-The exporter reads `GET /rest/projectconfig/1/issuetype/{projectKey}/{issueTypeId}/fields` to record the view screen for each project and issue type. No documented Jira DC route exposes that association, and the route is read-only. The risk is bounded by marking the stage `"api": "internal"`, recording failures in coverage instead of fabricating records, and limiting the normalized view to the View screen. Create and edit screens remain in `raw` only, and field configurations, field contexts, and screen schemes remain declared gaps. The route is undocumented and may change between Jira versions.
+The exporter reads `GET /rest/projectconfig/1/issuetype/{projectKey}/{issueTypeId}/fields` to record the view screen for each project and issue type. No documented Jira DC route exposes that association, and the route is read-only. The risk is bounded by marking the stage `"api": "internal"`, recording failures in coverage instead of fabricating records, and limiting the normalized view to the View screen. Create and edit screens remain in `raw` only; field configurations remain a declared gap, and field contexts and screen schemes are recorded in sections 14.5 and 14.6. The route is undocumented and may change between Jira versions.
 
 ### 14.3 Connection-check command
 
@@ -190,3 +190,11 @@ The exporter reads `GET /rest/projectconfig/1/issuetype/{projectKey}/{issueTypeI
 ### 14.4 Terminal progress and request pacing
 
 Section 9 requires progress by entity/source stage. The exporter also prints one dot per record written, spaces requests evenly at `REQUESTS_PER_MINUTE` (120, a source constant rather than a command option), and shows a 429 wait inline as `(wait:Ns)` while retrying up to three times. These choices make a long, paced run observable from the terminal without a log, TUI, or progress file. They do not promise configurable pacing, a persisted wait state, or per-record progress as a machine-readable artifact; the coverage summary and checkpoint remain the durable progress record. Preflight and `doctor` requests are outside the pacing.
+
+### 14.5 Field contexts
+
+Section 5 includes field contexts only "where exposed by the source API". No supported read route was identified: the bundled Jira DC 11.2.1 OpenAPI document defines the `FieldConfigScheme` bean but no read operation, and `GET /rest/api/2/field/{id}/configschemes` returned 404 on Jira DC 11.3.12, whose `application.wadl` route lists for `/rest/api/2` and `/rest/projectconfig/1` contain no context route. The exporter reports `field_contexts` as an `unsupported` declared gap with that evidence rather than inferring contexts from field applicability or custom-field type keys.
+
+### 14.6 Screen scheme inventories
+
+Section 5 includes screen schemes and issue type screen schemes "when available through the supported APIs". No supported read route was identified for either: neither the bundled Jira DC 11.2.1 OpenAPI document nor the `application.wadl` route lists published by Jira DC 11.3.12 contain a read route for screen schemes or issue type screen schemes. The exporter reports `screen_schemes` and `issue_type_screen_schemes` as `unsupported` declared gaps with that evidence, and records the view screen from the internal project-config route in section 14.2 rather than inventing a scheme association.

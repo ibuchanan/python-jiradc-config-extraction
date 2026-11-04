@@ -88,7 +88,11 @@ Schema version 1.
 | `raw` | The complete source object as Jira returned it. |
 | other keys | A normalized view of selected properties, named for the entity. |
 
-Records are written in the order Jira returned them, except that `fields.jsonl` and each page or unit's own records are sorted by ID. Duplicate source IDs within a stage are written once; the first wins.
+Records are written in the order Jira returned them, except that `fields.jsonl` and each page or unit's own records are sorted by ID.
+
+### Duplicate source IDs
+
+The duplicate-source-ID policy is **first occurrence wins**. If a stage receives the same `source.id` more than once — in one page or unit, in a later unit, or after a resume — only the first record is written; later records with that ID are ignored. The order of the remaining records is unchanged. Every stage applies this policy.
 
 ## Coverage statuses
 

@@ -188,3 +188,35 @@ async def test_screens_sends_both_paging_parameters_and_reads_screens_key() -> N
 
     assert queries == [{"startAt": "0", "maxResults": "100"}]
     assert [record["source"]["id"] for record in records] == ["10"]
+
+
+@pytest.mark.anyio
+async def test_screens_keep_first_repeated_source_id_in_a_page() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "startAt": 0,
+                "maxResults": 100,
+                "total": 2,
+                "screens": [
+                    {"id": 10, "name": "First"},
+                    {"id": 10, "name": "Second"},
+                ],
+            },
+        )
+
+    async with JiraClient(
+        "https://jira.example.com/jira",
+        user="admin",
+        password="s3cret",  # noqa: S106
+        requests_per_minute=60_000,
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        records: list[dict[str, Any]] = [
+            record async for batch in client.screens() for record in batch.records
+        ]
+
+    assert [
+        (record["source"]["id"], record["screen"]["name"]) for record in records
+    ] == [("10", "First")]

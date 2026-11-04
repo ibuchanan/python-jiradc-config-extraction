@@ -296,7 +296,7 @@ def test_cli_retries_failed_stage_without_persisting_secret(
     assert sibling.read_text() == '{"source":{"id":"screen_1"}}\n'
 
 
-def test_cli_upserts_repeated_source_ids(
+def test_cli_keeps_first_repeated_source_id(
     tmp_path: Path, monkeypatch: MonkeyPatch, jira_basic_auth_fixture: FixtureSetup
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -317,7 +317,7 @@ def test_cli_upserts_repeated_source_ids(
     ]
     assert [
         (record["source"]["id"], record["field"]["name"]) for record in records
-    ] == [("customfield_1", "Current")]
+    ] == [("customfield_1", "Old")]
 
 
 def test_cli_exports_names_verbatim_and_full_raw_payload(

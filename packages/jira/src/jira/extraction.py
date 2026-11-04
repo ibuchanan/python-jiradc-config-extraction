@@ -13,6 +13,7 @@ from .errors import JiraError, describe_exception
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from typing import Any
 
     from .client import JiraClient
 
@@ -52,6 +53,17 @@ def _record(
         "extracted_at": datetime.now(UTC).isoformat(),
         **data,
     }
+
+
+def _keep_first[T](by_id: dict[str, T], identifier: str, value: T) -> None:
+    """Record a value under its source ID, keeping the first occurrence.
+
+    Jira can return the same source ID more than once in a page or unit. The
+    duplicate-source-ID policy is first occurrence wins: later values with the
+    same ID are ignored. The CLI's stage file applies the same policy across
+    units and resumed runs, so one policy holds for a whole stage.
+    """
+    by_id.setdefault(identifier, value)
 
 
 def _invalid_response(message: str, cause: BaseException | None = None) -> JiraError:
@@ -121,7 +133,9 @@ async def field_inventory(client: JiraClient) -> list[dict[str, object]]:
     ):
         raise _invalid_response("Jira custom field missing a stable id")
 
-    by_id = {field["id"]: field for field in custom_field_defs}
+    by_id: dict[str, Any] = {}
+    for field in custom_field_defs:
+        _keep_first(by_id, field["id"], field)
     custom_field_defs = [by_id[field_id] for field_id in sorted(by_id)]
 
     return [
@@ -197,19 +211,23 @@ async def custom_fields(
                 if not isinstance(field, dict) or not isinstance(field.get("id"), str):
                     raise ValueError("Invalid custom field identifier")
                 if field["id"] in field_id_set:
-                    by_id[field["id"]] = _record(
-                        "custom_fields",
+                    _keep_first(
+                        by_id,
                         field["id"],
-                        endpoint,
-                        raw=field,
-                        field_id=field["id"],
-                        project_ids=sorted(
-                            str(value) for value in field.get("projectIds", [])
+                        _record(
+                            "custom_fields",
+                            field["id"],
+                            endpoint,
+                            raw=field,
+                            field_id=field["id"],
+                            project_ids=sorted(
+                                str(value) for value in field.get("projectIds", [])
+                            ),
+                            issue_type_ids=sorted(
+                                str(value) for value in field.get("issueTypeIds", [])
+                            ),
+                            all_projects=field.get("isAllProjects"),
                         ),
-                        issue_type_ids=sorted(
-                            str(value) for value in field.get("issueTypeIds", [])
-                        ),
-                        all_projects=field.get("isAllProjects"),
                     )
 
             start += len(values)
@@ -275,17 +293,21 @@ async def custom_field_options(
 
                     option_id = str(option["id"])
                     value = option.get("value")
-                    by_id[option_id] = _record(
-                        "custom_field_option",
-                        f"{field_id}:{option_id}",
-                        endpoint,
-                        raw=option,
-                        field_id=field_id,
-                        value=value,
-                        disabled=option.get("disabled"),
-                        child_ids=[
-                            str(child) for child in option.get("childrenIds", [])
-                        ],
+                    _keep_first(
+                        by_id,
+                        option_id,
+                        _record(
+                            "custom_field_option",
+                            f"{field_id}:{option_id}",
+                            endpoint,
+                            raw=option,
+                            field_id=field_id,
+                            value=value,
+                            disabled=option.get("disabled"),
+                            child_ids=[
+                                str(child) for child in option.get("childrenIds", [])
+                            ],
+                        ),
                     )
 
                 seen += len(options)
@@ -338,12 +360,16 @@ async def screens(client: JiraClient, start_at: int = 0) -> AsyncIterator[Batch]
 
                 identifier = str(screen["id"])
                 name = screen.get("name")
-                by_id[identifier] = _record(
-                    "screen",
+                _keep_first(
+                    by_id,
                     identifier,
-                    endpoint,
-                    raw=screen,
-                    screen={"name": name},
+                    _record(
+                        "screen",
+                        identifier,
+                        endpoint,
+                        raw=screen,
+                        screen={"name": name},
+                    ),
                 )
 
             start += len(values)
@@ -386,14 +412,18 @@ async def screen_tabs(
 
                 tab_id = str(tab["id"])
                 name = tab.get("name")
-                by_id[tab_id] = _record(
-                    "screen_tab",
-                    f"{screen_id}:{tab_id}",
-                    endpoint,
-                    raw=tab,
-                    screen_id=screen_id,
-                    position=position,
-                    name=name,
+                _keep_first(
+                    by_id,
+                    tab_id,
+                    _record(
+                        "screen_tab",
+                        f"{screen_id}:{tab_id}",
+                        endpoint,
+                        raw=tab,
+                        screen_id=screen_id,
+                        position=position,
+                        name=name,
+                    ),
                 )
 
             yield Batch(list(by_id.values()), index + 1)
@@ -438,16 +468,20 @@ async def screen_tab_fields(
 
                 field_id = field["id"]
                 identifier = f"{screen_id}:{tab_id}:{field_id}"
-                by_id[identifier] = _record(
-                    "screen_tab_field",
+                _keep_first(
+                    by_id,
                     identifier,
-                    endpoint,
-                    raw=field,
-                    screen_id=screen_id,
-                    tab_id=tab_id,
-                    field_id=field_id,
-                    position=position,
-                    show_when_empty=field.get("showWhenEmpty"),
+                    _record(
+                        "screen_tab_field",
+                        identifier,
+                        endpoint,
+                        raw=field,
+                        screen_id=screen_id,
+                        tab_id=tab_id,
+                        field_id=field_id,
+                        position=position,
+                        show_when_empty=field.get("showWhenEmpty"),
+                    ),
                 )
 
             yield Batch(list(by_id.values()), index + 1)
@@ -497,17 +531,21 @@ async def projects(client: JiraClient, start_at: int = 0) -> AsyncIterator[Batch
                 or not project["key"]
             ):
                 raise ValueError("Invalid project identifier")
-            by_id[identifier] = _record(
-                "project",
+            _keep_first(
+                by_id,
                 identifier,
-                endpoint,
-                raw=project,
-                project={
-                    "key": project["key"],
-                    "name": project.get("name"),
-                    "project_type_key": project.get("projectTypeKey"),
-                    "archived": project.get("archived"),
-                },
+                _record(
+                    "project",
+                    identifier,
+                    endpoint,
+                    raw=project,
+                    project={
+                        "key": project["key"],
+                        "name": project.get("name"),
+                        "project_type_key": project.get("projectTypeKey"),
+                        "archived": project.get("archived"),
+                    },
+                ),
             )
 
         yield Batch([by_id[key] for key in sorted(by_id, key=_numeric_order)], 1)
@@ -544,15 +582,19 @@ async def issue_types(client: JiraClient, start_at: int = 0) -> AsyncIterator[Ba
             )
             if identifier is None:
                 raise ValueError("Invalid issue type identifier")
-            by_id[identifier] = _record(
-                "issue_type",
+            _keep_first(
+                by_id,
                 identifier,
-                endpoint,
-                raw=issue_type,
-                issue_type={
-                    "name": issue_type.get("name"),
-                    "subtask": issue_type.get("subtask"),
-                },
+                _record(
+                    "issue_type",
+                    identifier,
+                    endpoint,
+                    raw=issue_type,
+                    issue_type={
+                        "name": issue_type.get("name"),
+                        "subtask": issue_type.get("subtask"),
+                    },
+                ),
             )
 
         yield Batch([by_id[key] for key in sorted(by_id, key=_numeric_order)], 1)

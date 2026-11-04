@@ -61,6 +61,3 @@ root = ["./packages/cli/src", "./packages/cli/tests", "./packages/config/src", "
 
 [tool.ruff.lint.isort]
 known-first-party = ["cli", "config", "jira"]
-
-[tool.hatch.build.targets.wheel]
-packages = ["packages/jira/src/jira"]

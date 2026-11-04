@@ -1,5 +1,7 @@
 """Jira extraction methods own REST paths and normalize API responses."""
 
+from __future__ import annotations
+
 import gzip
 import json
 from typing import Any

@@ -1,5 +1,7 @@
 """Screen inventory at the public CLI and JSONL seam."""
 
+from __future__ import annotations
+
 import json
 from typing import TYPE_CHECKING
 

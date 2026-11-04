@@ -1,5 +1,7 @@
 """Typed credentials for local application configuration."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 import yaml

@@ -1,5 +1,7 @@
 """End-to-end coverage reporting at the CLI and artifact seams."""
 
+from __future__ import annotations
+
 import json
 import re
 from pathlib import Path

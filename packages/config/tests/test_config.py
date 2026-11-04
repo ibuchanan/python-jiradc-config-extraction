@@ -1,5 +1,7 @@
 """Tests for loading local Jira Data Center credentials."""
 
+from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 import pytest

@@ -665,7 +665,7 @@ async def issue_type_schemes(
                         "issue_type_scheme",
                         scheme_id,
                         f"/rest/api/2/issuetypescheme/{scheme_id}",
-                        raw=scheme,
+                        raw={"scheme": scheme, "associations": associations},
                         issue_type_scheme={
                             "name": scheme.get("name"),
                             "issue_type_ids": sorted(
@@ -790,7 +790,7 @@ async def project_issue_type_view_screens(
                         "project_issue_type_view_screen",
                         f"{project_id}:{issue_type_id}",
                         endpoint,
-                        raw=screen,
+                        raw=payload,
                         project_id=project_id,
                         issue_type_id=issue_type_id,
                         view_screen={

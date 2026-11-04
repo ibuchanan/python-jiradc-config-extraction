@@ -95,7 +95,14 @@ def _scheme_handler(requests: list[str]) -> Callable[[httpx.Request], httpx.Resp
         if path.endswith("/associations"):
             return httpx.Response(
                 200,
-                json=[{"id": "10000", "key": "A", "lead": {"name": "private-lead"}}]
+                json=[
+                    {
+                        "id": "10000",
+                        "key": "A",
+                        "lead": {"name": "private-lead"},
+                        "description": "kept association property",
+                    }
+                ]
                 if scheme_id == "10100"
                 else [],
             )
@@ -107,6 +114,7 @@ def _scheme_handler(requests: list[str]) -> Callable[[httpx.Request], httpx.Resp
                 "name": f"Scheme {scheme_id}",
                 "issueTypes": [{"id": "3"}, {"id": "1"}],
                 "defaultIssueType": {"id": "1"},
+                "description": "kept scheme property",
             },
         )
 
@@ -128,7 +136,24 @@ async def test_issue_type_schemes_combine_issue_types_and_projects() -> None:
         "project_ids": ["10000"],
     }
     assert records[1]["issue_type_scheme"]["project_ids"] == []
-    assert "private-lead" not in str(records)
+    assert records[0]["raw"] == {
+        "scheme": {
+            "id": "10100",
+            "name": "Scheme 10100",
+            "issueTypes": [{"id": "3"}, {"id": "1"}],
+            "defaultIssueType": {"id": "1"},
+            "description": "kept scheme property",
+        },
+        "associations": [
+            {
+                "id": "10000",
+                "key": "A",
+                "lead": {"name": "private-lead"},
+                "description": "kept association property",
+            }
+        ],
+    }
+    assert "private-lead" not in str(records[0]["issue_type_scheme"])
 
 
 @pytest.mark.anyio
@@ -209,7 +234,10 @@ def _view_screen_handler(
                     "totalProjectsCount": 3,
                     "hiddenProjectsCount": 1,
                     "canEdit": True,
-                }
+                },
+                "createScreen": {"screenId": 8, "screenName": "Create screen"},
+                "editScreen": {"screenId": 9, "screenName": "Edit screen"},
+                "siblingField": "kept sibling",
             },
         )
 
@@ -217,7 +245,7 @@ def _view_screen_handler(
 
 
 @pytest.mark.anyio
-async def test_view_screens_use_the_internal_route_and_keep_ids_and_raw_payload() -> (
+async def test_view_screens_use_the_internal_route_and_keep_the_complete_response() -> (
     None
 ):
     requests: list[str] = []
@@ -240,7 +268,18 @@ async def test_view_screens_use_the_internal_route_and_keep_ids_and_raw_payload(
         "total_projects_count": 3,
         "hidden_projects_count": 1,
     }
-    assert records[0]["raw"]["sharedWithProjects"][0]["name"] == "private-name"
+    assert records[0]["raw"]["viewScreen"]["sharedWithProjects"][0]["name"] == (
+        "private-name"
+    )
+    assert records[0]["raw"]["createScreen"] == {
+        "screenId": 8,
+        "screenName": "Create screen",
+    }
+    assert records[0]["raw"]["editScreen"] == {
+        "screenId": 9,
+        "screenName": "Edit screen",
+    }
+    assert records[0]["raw"]["siblingField"] == "kept sibling"
 
 
 @pytest.mark.anyio

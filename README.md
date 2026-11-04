@@ -2,7 +2,7 @@
 
 A read-only command-line tool that exports the configuration of a Jira Data Center instance — custom fields, options, screens, projects, issue types, schemes — into a local folder of JSON Lines files you can analyze.
 
-It was built to help migration analysts see how custom fields (especially Elements Connect fields) are used, without needing a database dump. Each record keeps the complete response Jira returned, plus its source and extraction time, so you can trace any finding back to evidence.
+It was built to help migration analysts see how custom fields (especially Elements Connect fields) are used, without needing a database dump. Each record keeps the complete response (or responses) Jira returned, plus its source and extraction time, so you can trace any finding back to evidence.
 
 ## Is this for you?
 

@@ -14,7 +14,7 @@ A database dump is a complete copy of everything Jira stores: configuration, iss
 
 **It stays inside what Jira supports.** The client only issues `GET` requests, so a run cannot change Jira. It also reads through documented operations, so the records mean what Jira's API says they mean, rather than what an analyst infers from a table. The exception is one internal route, used for view screens, which is marked `"api": "internal"` in the output so you know it carries more risk of changing.
 
-**The output is shaped for analysis, not restoration.** Every line is a self-contained JSON record with a source system, entity, ID, endpoint, and extraction time. Related records join on stable IDs. Each record also keeps the complete source object under `raw`, so nothing Jira returned is thrown away. A dump has to be loaded into a database of the right version before you can query it.
+**The output is shaped for analysis, not restoration.** Every line is a self-contained JSON record with a source system, entity, ID, endpoint, and extraction time. Related records join on stable IDs. Each record also keeps the complete source response under `raw` — or both responses, when one record joins two — so nothing Jira returned is thrown away. A dump has to be loaded into a database of the right version before you can query it.
 
 **It is honest about what it missed.** A dump is silent about gaps: if a table is empty you cannot tell whether nothing is configured or whether you read the wrong table. The export records a coverage status for each stage in `manifest.json`: `complete`, `not_queried`, `unsupported`, `unauthorized`, or `failed`. A stage marked `unsupported` means "this tool could not look", not "there is nothing there".
 

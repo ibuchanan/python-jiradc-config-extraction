@@ -85,7 +85,7 @@ Schema version 1.
 | `source.id` | Source identifier. Composite IDs join parts with `:`. |
 | `source.endpoint` | The read-only route used. |
 | `extracted_at` | UTC time of the export, ISO 8601. |
-| `raw` | The complete source object as Jira returned it. |
+| `raw` | The complete source response as Jira returned it. A record assembled from more than one response keeps each response under its own key. |
 | other keys | A normalized view of selected properties, named for the entity. |
 
 Records are written in the order Jira returned them, except that `fields.jsonl` and each page or unit's own records are sorted by ID.
